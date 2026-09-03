@@ -139,6 +139,12 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.waitForSelector('aside .source-block.highlight');
   for(const width of [1440,768,375]){await page.setViewport({width,height:900});const size=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));if(size.sw>size.w+1){console.log(size);await page.screenshot({path:join(screenshotDir,'center-overflow.png'),fullPage:true});}assert.ok(size.sw<=size.w+1,JSON.stringify(size));if(width===1440)assert.ok(size.sh<=size.h+1);await page.screenshot({path:join(screenshotDir,`center-saved-${width}.png`),fullPage:true});}
   await page.setViewport({width:1440,height:900});
+  // Комплект: загрузка и редакции — один раздел.
+  await page.click('[data-action=tab][data-value=set]');
+  await page.waitForSelector('#dropzone');
+  assert.ok(await page.$('.version'),'Revisions live in the same section as the upload');
+  assert.equal(await page.$$eval('[data-action=tab]',els=>els.length),6,'Six sections, upload and revisions merged');
+  await page.screenshot({path:join(screenshotDir,'center-set-1440.png'),fullPage:true});
   await page.click('[data-action=tab][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
   assert.match(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent),/Риски · 1/,'The menu counts candidates waiting for a decision');
   for(const width of [1440,375]){await page.setViewport({width,height:900});await page.screenshot({path:join(screenshotDir,`center-candidates-${width}.png`),fullPage:true});}

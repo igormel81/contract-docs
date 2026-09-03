@@ -3,7 +3,7 @@ import { sourceLabel, documentText, compactPassport, locationLabel, findingKey, 
 import { messageParts } from './summary.js';
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = { user:null, boot:null, contract:null, contractId:null, revisionId:null, runId:null, center:'upload', kind:'contract', customer:'', queues:new Map(), selections:new Map(), source:null, risk:null, form:null, loginMode:'login', query:'', drafts:new Map(), summary:null };
+const state = { user:null, boot:null, contract:null, contractId:null, revisionId:null, runId:null, center:'set', kind:'contract', customer:'', queues:new Map(), selections:new Map(), source:null, risk:null, form:null, loginMode:'login', query:'', drafts:new Map(), summary:null };
 const labels = { ...stageLabels,...severityLabels,ready:'Текст извлечён',processing:'Обработка',extracted:'Из документа',missing:'Не найдено',uncertain:'Нужно уточнить',open:'Открыто',verification:'На проверке',done:'Выполнено',unverified:'Сигнал · не проверен',confirmed:'Подтверждено',dismissed:'Не подтвердилось',recorded:'Зафиксировано' };
 const btn = (title, action, value='', cls='', disabled=false) => `<button type="button" data-action="${action}" data-value="${esc(value)}" class="${cls}" ${disabled?'disabled':''}>${title}</button>`;
 const badge = (title, cls='') => `<span class="badge ${cls}">${esc(title)}</span>`;
@@ -21,7 +21,7 @@ let noticeTimer, focusSummary=false;
 function notice(text) { $('#notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').textContent='',7000); }
 async function refreshBoot() { state.boot=await api('/bootstrap'); }
 async function refreshContract() { if(state.contractId){state.contract=await api('/contracts/'+state.contractId); if(!state.contract.revisions.some(r=>r.id===state.revisionId))state.revisionId=state.contract.revisions[0]?.id||null;} }
-async function openContract(id) { state.sourceDocuments=null;state.summary=null;state.contractId=id;state.revisionId=null;state.runId=null;state.source=null;state.risk=null;state.form=null;await refreshContract();state.center=state.contract.revisions.length?'passport':'upload';history.replaceState(null,'','#'+id);render(); }
+async function openContract(id) { state.sourceDocuments=null;state.summary=null;state.contractId=id;state.revisionId=null;state.runId=null;state.source=null;state.risk=null;state.form=null;await refreshContract();state.center=state.contract.revisions.length?'passport':'set';history.replaceState(null,'','#'+id);render(); }
 function summaryPanel(a) {
   const s=state.summary; if(!s||s.analysisId!==a.id)return '';
   const parts=messageParts(s.text), manager=state.contract.manager;
@@ -60,14 +60,17 @@ function uploadView() {
 }
 function documentView() {
   const files=state.sourceDocuments||state.contract.files; const file=files.find(f=>f.id===state.source?.fileId)||files.find(f=>revision()?.file_ids.includes(f.id))||files[0];
-  if(!file)return `<div class="empty"><h2>Исходников пока нет</h2><p>Загрузите основной договор и приложения.</p>${btn('Загрузить','tab','upload','primary')}</div>`;
+  if(!file)return `<div class="empty"><h2>Исходников пока нет</h2><p>Загрузите основной договор и приложения.</p>${btn('Загрузить','tab','set','primary')}</div>`;
   return `<div class="flow"><div class="row"><label class="grow">Документ<select id="document-select">${files.map(f=>`<option value="${f.id}" ${f.id===file.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select></label><a href="/docs/api/files/${file.id}/download" class="compact-action">Скачать оригинал</a></div><small>${state.source?.riskId?'Пункт и редакция, зафиксированные при регистрации риска.':state.sourceDocuments?'Исходник выбранного анализа. Обновление структуры файла не меняет этот снимок.':'Структура документа с исходной нумерацией. Нераспознанные номера не подставляются.'}</small>${!state.sourceDocuments&&file.extraction?.extractor!=='clauses-v2'?btn('Обновить структуру','refresh-structure',file.id,'quiet'):''}${file.extraction?.warnings?.length?`<div class="warning">${file.extraction.warnings.map(esc).join('<br>')}</div>`:''}${documentText(file,state.source,esc)}</div>`;
 }
 function passportView() {
   const r=result(),a=analysis();
-  if(!r||a.revision_id!==state.revisionId)return `<div class="empty"><span class="empty-mark">Паспорт договора</span><h2>О чём договор — в нескольких строках</h2><p>Зафиксируйте комплект и запустите анализ. Первый агент сформирует предмет и ключевые условия, второй проверит их по исходникам.</p><p>Неизвестные условия не заполняются догадками.</p>${btn('К документам','tab','upload','primary')}</div>`;
+  if(!r||a.revision_id!==state.revisionId)return `<div class="empty"><span class="empty-mark">Паспорт договора</span><h2>О чём договор — в нескольких строках</h2><p>Зафиксируйте комплект и запустите анализ. Первый агент сформирует предмет и ключевые условия, второй проверит их по исходникам.</p><p>Неизвестные условия не заполняются догадками.</p>${btn('К комплекту','tab','set','primary')}</div>`;
   return `<div class="flow"><div class="row between"><h2>Паспорт · v${revision()?.number}</h2>${badge(a.review_result?'С ревью':'Без ревью',a.review_result?'':'medium')}</div><p>${esc(r.summary)}</p>${compactPassport(r,esc,sources)}<details><summary>Ограничения проверки</summary><div class="warning">${r.limitations.map(esc).join('<br>')}</div><p class="muted">Паспорт относится к выбранному комплекту и не означает юридического согласования.</p></details></div>`;
 }
+// Комплект: загрузка файлов, состав новой редакции и сами редакции — один раздел,
+// потому что это одна работа, а не две.
+function setView() { return uploadView()+'<hr class="separator">'+versionsView(); }
 function versionsView() { return `<div class="flow"><div class="row between"><h2>Редакции</h2>${btn('Сравнить','compare','','',state.contract.revisions.length<2)}</div>${state.contract.revisions.map(r=>`<article class="version"><div class="row between"><h3>v${r.number} ${state.contract.effective_id===r.id?badge('Действующий','good'):''}</h3>${btn('Открыть','revision',r.id,'compact-action')}</div><small>${date(r.created)} · ${r.file_ids.length} файлов</small><p>${esc(r.note)}</p><p class="muted">Основана на ${r.parent_id?'v'+state.contract.revisions.find(x=>x.id===r.parent_id)?.number:'исходном комплекте'}</p>${btn('Подтвердить действующий комплект','effective',r.id,'quiet compact-action')}</article>`).join('')||'<p class="muted">Редакций пока нет. Зафиксируйте первый комплект на вкладке загрузки.</p>'}${btn('Изменить стадию договора','stage','','quiet')}</div>`; }
 function compareView() {
   const versions=state.contract.revisions;
@@ -116,15 +119,14 @@ function centerView() {
   if(state.center==='settings')return settingsView();
   if(state.center==='rules')return `<div class="flow"><h2>Критерии проверки</h2><p class="muted">Рекомендательный разбор для подготовки к переговорам, а не заключение о соответствии: правила формулируют вопросы и предложения, решение принимает сотрудник. Аналитик ищет полноту, ревьюер проверяет по оригиналам. Обе компании находятся в Москве. У каждого критерия своя версия: при её изменении прежние анализы не переписываются, а помечаются в истории.</p>${state.boot.rules.map(r=>`<section class="details-field"><div class="row">${badge(r.id)}${badge('версия '+r.version)}${r.coverage===false?badge('вне покрытия','medium'):''}</div><h3>${esc(r.title)}</h3><p>${esc(r.instruction)}</p>${r.avoid?`<p class="muted"><strong>Не считать замечанием:</strong> ${esc(r.avoid)}</p>`:''}</section>`).join('')}</div>`;
   if(!state.contract)return `<div class="empty"><span class="empty-mark">Рабочее место</span><h2>Начните с заказчика и договора</h2><p>Здесь будут оригиналы, паспорт, история анализа и риски. Демонстрационных договоров нет — все записи создаёте вы.</p>${btn('Создать заказчика','new-customer','','primary')}</div>`;
-  return ({upload:uploadView,document:documentView,passport:passportView,versions:versionsView,compare:compareView,analysis:analysisView,risks:riskView,history:historyView}[state.center]||passportView)();
+  return ({set:setView,document:documentView,passport:passportView,compare:compareView,analysis:analysisView,risks:riskView,history:historyView}[state.center]||passportView)();
 }
 // Вторая область — спутник, а не второй раздел: она показывает то, что парно
 // открытому разделу. Своего меню у неё нет, поэтому одно и то же содержимое
 // больше не живёт в двух местах под разными подписями.
 const companions = {
   document:{title:'Замечания по документу',view:()=>analysisView()},
-  upload:{title:'Состав редакции',view:()=>state.contract.revisions.length?versionsView():'<div class="empty"><p>Зафиксируйте комплект — здесь появятся редакции.</p></div>'},
-  versions:{title:'Документ',view:()=>documentView()},
+  set:{title:'Документ',view:()=>documentView()},
   compare:{title:'Документ',view:()=>documentView()}
 };
 function companionTitle() { return companions[state.center]?.title || 'Источник'; }
@@ -168,7 +170,7 @@ function render() {
   if(!state.boot)return;
   const oldResult=$('.analysis-result'),oldKey=oldResult?.dataset.resultKey,oldScroll=oldResult?.closest('.content')?.scrollTop;
   const c=state.contract;
-  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Разделы договора">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['upload','Загрузка'],['versions','Редакции'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><div class="tabs row"><span>${c?esc(companionTitle()):'Рабочая область'}</span></div><div class="content">${c?companionView():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.7 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
+  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Разделы договора">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['set','Комплект'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><div class="tabs row"><span>${c?esc(companionTitle()):'Рабочая область'}</span></div><div class="content">${c?companionView():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.7 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
   if(state.center==='quick'){$('#main').innerHTML=quick.view();$('.footer').textContent='Разовая проверка: без записи в хранилище · результат требует проверки сотрудником';}
   const newResult=$('.analysis-result');
   if(oldKey&&newResult?.dataset.resultKey===oldKey)newResult.closest('.content').scrollTop=oldScroll;
@@ -196,8 +198,8 @@ document.addEventListener('click',async event=>{
   const button=event.target.closest('[data-action]');if(!button)return;const action=button.dataset.action,value=button.dataset.value;button.disabled=true;
   try{
     if(action==='quick-open'){state.center='quick';state.form=null;await quick.open();history.replaceState(null,'','#quick');render();return;}
-    if(action==='stored'){state.center=state.contract?'passport':'upload';history.replaceState(null,'',state.contractId?'#'+state.contractId:location.pathname);render();return;}
-    if(action==='from-quick'){state.center='upload';state.kind='contract';state.form=state.boot.customers.length?{type:'contract'}:{type:'customer'};history.replaceState(null,'',location.pathname);notice('Для постоянного учёта загрузите те же файлы в договор: оригиналы разовой проверки уже удалены.');render();return;}
+    if(action==='stored'){state.center=state.contract?'passport':'set';history.replaceState(null,'',state.contractId?'#'+state.contractId:location.pathname);render();return;}
+    if(action==='from-quick'){state.center='set';state.kind='contract';state.form=state.boot.customers.length?{type:'contract'}:{type:'customer'};history.replaceState(null,'',location.pathname);notice('Для постоянного учёта загрузите те же файлы в договор: оригиналы разовой проверки уже удалены.');render();return;}
     if(action.startsWith('quick-')){await quick.action(action,value,button);return;}
     if(action==='show-password'){const input=$('input[name=password]');input.type=input.type==='password'?'text':'password';button.textContent=input.type==='password'?'Показать пароль':'Скрыть пароль';button.disabled=false;return;}
     if(action==='auth-mode'){state.loginMode=value;render();return;}
@@ -276,7 +278,7 @@ document.addEventListener('submit',async event=>{
     if(type==='password'){await api('/me',data,'PATCH');state.user=null;render();notice('Пароль изменён. Войдите снова.');return;}
     if(type==='customer'){const value=await api('/customers',data);state.customer=value.id;await refreshBoot();state.form={type:'contract'};render();return;}
     if(type==='contract'){const value=await api('/contracts',{...data,kind:state.kind});await refreshBoot();await openContract(value.id);return;}
-    if(type==='revision'){const value=await api('/contracts/'+state.contractId+'/revisions',{...data,file_ids:[...chosen()]});await refreshContract();await refreshBoot();state.revisionId=value.id;state.runId=null;state.center='versions';state.queues.set(state.contractId,[]);notice('Редакция v'+value.number+' сохранена. Анализ запускается отдельно.');}
+    if(type==='revision'){const value=await api('/contracts/'+state.contractId+'/revisions',{...data,file_ids:[...chosen()]});await refreshContract();await refreshBoot();state.revisionId=value.id;state.runId=null;state.center='set';state.queues.set(state.contractId,[]);notice('Редакция v'+value.number+' сохранена. Анализ запускается отдельно.');}
     if(type==='effective')await api('/contracts/'+state.contractId+'/effective',{revision_id:state.form.id,reason:data.reason});
     if(type==='stage')await api('/contracts/'+state.contractId,data,'PATCH');
     if(type==='manager'){await api('/contracts/'+state.contractId,{manager:data.manager},'PATCH');notice('Ответственный сохранён.');}
