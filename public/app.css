@@ -22,3 +22,10 @@
 .contract-text .clause-heading{font-weight:650;margin-top:22px}
 .contract-text mark{background:#ead9a8;color:var(--ink)}
 @media(max-width:620px){.passport-row{grid-template-columns:1fr;gap:4px;padding:10px 0}.passport-evidence .source-link{min-height:36px}}
+a.compact-action{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink);text-decoration:none;padding:4px 7px;min-height:30px}
+a.compact-action:hover{background:var(--accent-bg)}
+.summary-panel{border:1px solid var(--line);border-radius:var(--radius);background:var(--canvas);padding:14px;margin-top:14px}
+.summary-panel textarea{font-size:13px;min-height:230px;background:var(--surface)}
+.summary-panel p{font-size:13px;line-height:1.6}
+@media(max-width:900px){.sidebar .row button{white-space:nowrap}}
+.warning .row,.error .row,.info .row{margin-top:8px}

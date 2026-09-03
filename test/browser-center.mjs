@@ -134,11 +134,32 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('section.panel .finding [data-action=source]');
   await page.waitForSelector('aside .source-block.highlight');
   for(const width of [1440,768,375]){await page.setViewport({width,height:900});const size=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));if(size.sw>size.w+1){console.log(size,await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(e=>e.getBoundingClientRect().right>innerWidth+1).map(e=>({tag:e.tagName,cls:e.className,w:e.getBoundingClientRect().width,right:e.getBoundingClientRect().right})).slice(0,20)));await page.screenshot({path:join(screenshotDir,'center-overflow.png'),fullPage:true});}assert.ok(size.sw<=size.w+1,JSON.stringify(size));if(width===1440)assert.ok(size.sh<=size.h+1);await page.screenshot({path:join(screenshotDir,`center-saved-${width}.png`),fullPage:true});}
-  await page.setViewport({width:1440,height:900});await page.click('[data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');await page.click('[data-form=risk] [type=submit]');await page.waitForSelector('[data-action=risk-source]');
+  await page.setViewport({width:1440,height:900});
+  await page.click('[data-action=right][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
+  assert.match(await page.$eval('[data-action=right][data-value=risks]',el=>el.textContent),/Риски · 1/,'The tab counts candidates waiting for a decision');
+  for(const width of [1440,375]){await page.setViewport({width,height:900});await page.screenshot({path:join(screenshotDir,`center-candidates-${width}.png`),fullPage:true});}
+  await page.setViewport({width:1440,height:900});
+  await page.click('aside [data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');
+  await page.click('[data-form=risk] [type=submit]');assert.ok(await page.$('[data-form=risk]'),'Risk severity is confirmed explicitly, never copied from the finding');
+  await page.select('[data-form=risk] select[name=severity]','high');
+  await page.click('[data-form=risk] [type=submit]');await page.waitForSelector('[data-action=risk-source]');
+  await page.waitForFunction(()=>!document.querySelector('[data-action=right][data-value=risks]').textContent.includes('·'));
   assert.match(await page.$eval('[data-action=risk-source]',el=>el.textContent),/v1.*п. 6.2/);
   await page.click('[data-action=risk-source]');await page.waitForSelector('.source-block.highlight');assert.match(await page.$eval('.source-block.highlight',el=>el.textContent),/6.2/);
   assert.doesNotMatch(await page.$eval('.source-block.highlight small',el=>el.textContent),/\bb\d+\b/);
-  await page.screenshot({path:join(screenshotDir,'center-risk-1440.png'),fullPage:true});assert.deepEqual(errors,[]);
+  await page.screenshot({path:join(screenshotDir,'center-risk-1440.png'),fullPage:true});
+  await page.click('[data-action=tab][data-value=analysis]');await page.waitForSelector('[data-action=summary-open]');
+  await page.click('[data-action=summary-open]');await page.waitForSelector('#summary-text');
+  const letter=await page.$eval('#summary-text',el=>el.value);
+  assert.match(letter,/Статус: ревью завершено/);assert.match(letter,/п\. 6\.2/);assert.doesNotMatch(letter,/\bb\d+\b/,'Internal block identifiers never reach a message');
+  for(const width of [1440,768,375]){await page.setViewport({width,height:900});await page.$eval('.summary-panel',el=>el.scrollIntoView({block:'start'}));const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'summary '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-summary-${width}.png`)});}
+  await page.setViewport({width:1440,height:900});await page.click('[data-action=summary-close]');
+  await page.click('[data-action=rules]');await page.waitForFunction(()=>document.body.textContent.includes('Не считать замечанием'));
+  for(const width of [1440,375]){await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'rules '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-rules-${width}.png`)});}
+  await page.setViewport({width:1440,height:900});await page.click('[data-action=right][data-value=history]');await page.waitForFunction(()=>document.body.textContent.includes('Аналитик:'));
+  await page.screenshot({path:join(screenshotDir,'center-history-1440.png')});
+  await page.setViewport({width:1440,height:900});
+  assert.deepEqual(errors,[]);
   console.log('PASS center and side layouts: saved/quick, source links, draft preservation, saving decisions, same run, keyboard focus, 1440/768/375.');
   console.log('PASS neutral login, header, catalogue and contract context; both contractor choices preserved.');
   console.log('PASS compact passport, original clause links, saved risk with frozen revision and source.');

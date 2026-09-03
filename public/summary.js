@@ -7,7 +7,7 @@ const trim = (value, length) => {
   if (text.length <= length) return text;
   const cut = text.slice(0, length);
   const stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('; '));
-  return (stop > length * 0.6 ? cut.slice(0, stop + 1) : cut) + '…';
+  return stop > length * 0.6 ? cut.slice(0, stop + 1) : cut + '…';
 };
 export function summaryText({ meta, result, full = false }) {
   if (!result) return '';

@@ -17,7 +17,7 @@ async function api(path, data, method='POST') {
   const response = await fetch('/docs/api'+path,{ method:data===undefined?'GET':method,headers:data===undefined?{}:{'Content-Type':'application/json','X-Docs-Request':'1'},body:data===undefined?undefined:JSON.stringify(data) });
   const payload=await response.json(); if(!response.ok){if(response.status===401&&state.user){state.user=null;render();} const error=new Error(payload.error||'Не удалось выполнить запрос.');error.status=response.status;throw error;} return payload;
 }
-let noticeTimer;
+let noticeTimer, focusSummary=false;
 function notice(text) { $('#notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').textContent='',7000); }
 async function refreshBoot() { state.boot=await api('/bootstrap'); }
 async function refreshContract() { if(state.contractId){state.contract=await api('/contracts/'+state.contractId); if(!state.contract.revisions.some(r=>r.id===state.revisionId))state.revisionId=state.contract.revisions[0]?.id||null;} }
@@ -133,8 +133,8 @@ function riskView() {
 function runCost(stageResult,title){
   const e=stageResult?.execution;if(!e)return '';
   const size=e.promptChars?Math.round(e.promptChars/1000)+' тыс. знаков':'размер не сохранён';
-  const time=e.durationMs?Math.round(e.durationMs/1000)+' с':'время не сохранено';
-  const tokens=e.usage?`${e.usage.input_tokens??'—'} / ${e.usage.output_tokens??'—'} токенов`:'расход не сообщён';
+  const time=e.durationMs?(e.durationMs<1000?e.durationMs+' мс':Math.round(e.durationMs/1000)+' с'):'время не сохранено';
+  const tokens=e.usage?`токены ${e.usage.input_tokens??'—'} → ${e.usage.output_tokens??'—'}`:'расход не сообщён';
   return `<small class="muted">${title}: ${size} · ${time} · ${tokens}</small>`;
 }
 const changedRules=a=>(state.boot.rules||[]).filter(rule=>{const used=a.rules?.find(x=>x.id===rule.id);return used&&used.version!==rule.version;}).map(r=>r.id);
@@ -144,11 +144,13 @@ function render() {
   if(!state.boot)return;
   const oldResult=$('.analysis-result'),oldKey=oldResult?.dataset.resultKey,oldScroll=oldResult?.closest('.content')?.scrollTop;
   const c=state.contract;
-  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Работа с договором">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['upload','Загрузка'],['versions','Редакции']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><nav class="tabs" aria-label="Результаты проверки">${[['analysis',state.center==='analysis'?'Источник':'Анализ'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'right',v,state.right===v?'active':'',!c)).join('')}</nav><div class="content">${c?({analysis:state.center==='analysis'?analysisSourceView:analysisView,risks:riskView,history:historyView}[state.right])():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.4 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
+  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Работа с договором">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['upload','Загрузка'],['versions','Редакции']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><nav class="tabs" aria-label="Результаты проверки">${[['analysis',state.center==='analysis'?'Источник':'Анализ'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'right',v,state.right===v?'active':'',!c)).join('')}</nav><div class="content">${c?({analysis:state.center==='analysis'?analysisSourceView:analysisView,risks:riskView,history:historyView}[state.right])():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.5 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
   if(state.center==='quick'){$('#main').innerHTML=quick.view();$('.footer').textContent='Разовая проверка: без записи в хранилище · результат требует проверки сотрудником';}
   const newResult=$('.analysis-result');
   if(oldKey&&newResult?.dataset.resultKey===oldKey)newResult.closest('.content').scrollTop=oldScroll;
   if(state.source?.blockId&&['document','analysis'].includes(state.center))requestAnimationFrame(()=>$('#source-'+state.source.blockId)?.scrollIntoView({block:'nearest'}));
+  // A panel that opens below the fold reads as a button that did nothing.
+  if(focusSummary){focusSummary=false;requestAnimationFrame(()=>{$('.summary-panel')?.scrollIntoView({block:'nearest'});const area=$('#summary-text');if(area){area.focus({preventScroll:true});area.select();}});}
 }
 async function uploadRow(row,contractId) {
   row.status='uploading';row.message='Загрузка…';if(state.contractId===contractId)render();
@@ -210,8 +212,8 @@ document.addEventListener('click',async event=>{
     if(action==='retry-analysis'){await api('/analyses/'+value+'/retry',{});await refreshContract();state.source=null;state.sourceDocuments=null;state.runId=state.contract.analyses[0].id;notice('Создана новая попытка. История сохранена.');}
     if(action==='cancel-analysis'){await api('/analyses/'+value+'/cancel',{});await refreshContract();}
     if(action==='run'){state.source=null;state.sourceDocuments=null;state.runId=value;state.right='analysis';}
-    if(action==='summary-open'){await loadSummary(analysis().id,false);}
-    if(action==='summary-scope'){await loadSummary(state.summary.analysisId,!state.summary.full);}
+    if(action==='summary-open'){await loadSummary(analysis().id,false);focusSummary=true;}
+    if(action==='summary-scope'){await loadSummary(state.summary.analysisId,!state.summary.full);focusSummary=true;}
     if(action==='summary-close')state.summary=null;
     if(action==='summary-copy'){
       const text=value===''?state.summary.text:messageParts(state.summary.text)[Number(value)];
