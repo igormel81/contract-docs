@@ -14,6 +14,7 @@ Environment=DOCS_ORIGIN=https://igoruan.ru
 Environment=DOCS_PORT=3107
 Environment=DOCS_DATA=/var/lib/contract-docs
 Environment=DOCS_CODEX=/usr/bin/codex
+Environment=DOCS_CODEX_ADMIN=igor
 UMask=0077
 Restart=on-failure
 RestartSec=3

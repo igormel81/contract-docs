@@ -18,9 +18,14 @@ export async function createApp(options = {}) {
   const sandbox = options.sandbox ?? (process.env.DOCS_EXTRACT_SANDBOX !== 'off');
   if (!sandbox && secure) throw new Error('Нельзя отключать изоляцию извлечения в production.');
   const db = database(dir); await mkdir(join(dir, 'files'), { recursive: true, mode: 0o700 });
+  const codexAdmin = String(options.codexAdmin ?? process.env.DOCS_CODEX_ADMIN ?? '').normalize('NFKC').trim().toLowerCase();
+  const canManageCodex = user => Boolean(codexAdmin) && user.login === codexAdmin;
+  function requireCodexAdmin(user) {
+    if (!canManageCodex(user)) throw new HttpError(403, 'Общим подключением Codex управляет владелец приложения.');
+  }
   const runner = new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
   const dummyHash = await passwordHash(token());
-  const timer = setInterval(() => runner.tick().catch(() => {}), 2000); timer.unref();
+  const timer = options.autoTick === false ? null : setInterval(() => runner.tick().catch(() => {}), 2000); timer?.unref();
   let uploading = 0;
   function send(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function cookie(res, value, maxAge = 43200) { res.setHeader('Set-Cookie', `docs_session=${value}; Path=/docs; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`); }
@@ -48,7 +53,7 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.0' });
+    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.1' });
     const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));
@@ -92,11 +97,18 @@ export async function createApp(options = {}) {
     if (path === '/docs/api/bootstrap' && req.method === 'GET') return send(res,200,{
       customers: db.prepare('SELECT * FROM customers WHERE user_id=? ORDER BY name').all(user.id),
       contracts: db.prepare('SELECT c.*, (SELECT COUNT(*) FROM revisions r WHERE r.contract_id=c.id) revision_count FROM contracts c WHERE user_id=? ORDER BY created DESC').all(user.id),
-      profiles, rules, codex: await runner.status(user.id)
+      profiles, rules, codex: await runner.status(canManageCodex(user))
     });
-    if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await runner.status(user.id));
-    if (path === '/docs/api/codex/login' && req.method === 'POST') { limit(db,`codex-login:${user.id}`,5,3600000); return send(res,200,await runner.login(user.id)); }
-    if (path === '/docs/api/codex/logout' && req.method === 'POST') { await runner.logout(user.id); return send(res,200,{ok:true}); }
+    if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await runner.status(canManageCodex(user)));
+    if (path === '/docs/api/codex/login' && req.method === 'POST') {
+      requireCodexAdmin(user); limit(db,'codex-login:application',5,3600000);
+      const connection = await runner.login(); audit(db,user.id,null,'Начат общий вход Codex'); return send(res,200,connection);
+    }
+    if (path === '/docs/api/codex/logout' && req.method === 'POST') {
+      requireCodexAdmin(user); const input=await jsonBody(req);
+      if (input.confirm !== 'disconnect-application') throw new HttpError(400,'Подтвердите отключение Codex для всего приложения.');
+      await runner.logout(); audit(db,user.id,null,'Общее подключение Codex отключено'); return send(res,200,{ok:true});
+    }
     if (path === '/docs/api/customers' && req.method === 'POST') {
       const input = await jsonBody(req); const name = required(input.name,200); const inn = String(input.inn || '').trim();
       if (inn && !/^\d{10}(\d{2})?$/.test(inn)) throw new HttpError(400,'ИНН должен содержать 10 или 12 цифр.');
@@ -171,7 +183,7 @@ export async function createApp(options = {}) {
       }
       if (action === 'analyses' && req.method === 'POST') {
         const input=await jsonBody(req); const rev=revision(required(input.revision_id),contract.id);
-        if (!(await runner.status(user.id)).connected) throw new HttpError(409,'Сначала подключите Codex в настройках. API-ключ не нужен.');
+        if (!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Владелец приложения должен выполнить вход в настройках.');
         if (db.prepare("SELECT id FROM analyses WHERE revision_id=? AND status IN ('queued','primary','review')").get(rev.id)) throw new HttpError(409,'Этот комплект уже в очереди или анализируется.');
         limit(db,`analyses:${user.id}`,10,3600000);
         const files = parse(rev.file_ids).map(key=>owned('files',key,user.id));
@@ -210,7 +222,7 @@ export async function createApp(options = {}) {
       }
       if(req.method==='POST'&&action==='retry'){
         if(!['error','interrupted'].includes(analysis.status)) throw new HttpError(409,'Эта попытка не требует повторения.');
-        if(!(await runner.status(user.id)).connected) throw new HttpError(409,'Подключите Codex.');
+        if(!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Обратитесь к владельцу приложения.');
         const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,primary_result,created,updated) VALUES(?,?,?,?,?,?,?,?,?)').run(key,user.id,analysis.contract_id,analysis.revision_id,'queued',analysis.snapshot,analysis.primary_result,now(),now());
         audit(db,user.id,analysis.contract_id,'Повтор анализа с сохранением прежней попытки',analysis.id); return send(res,202,{id:key});
       }
@@ -248,7 +260,7 @@ export async function createApp(options = {}) {
   }
   const server=http.createServer((req,res)=>route(req,res).catch(e=>{if(!res.headersSent)send(res,e.status||500,{error:e.status?e.message:'Не удалось выполнить действие. Повторите позже.'});else res.end();if(!e.status)console.error('request failed',e.code||e.name);}));
   server.requestTimeout=45000; server.headersTimeout=15000;
-  server.on('close',()=>{clearInterval(timer); if(runner.active)runner.active.child.kill('SIGTERM'); for(const login of runner.logins.values())login.child.kill('SIGTERM');db.close();});
+  server.on('close',()=>{clearInterval(timer); if(runner.active)runner.active.child.kill('SIGTERM'); runner.loginState?.child.kill('SIGTERM');db.close();});
   return {server,db,runner,dir};
 }
 if(process.argv[1] && realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

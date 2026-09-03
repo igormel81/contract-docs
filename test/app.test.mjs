@@ -34,7 +34,7 @@ test('grounded schema rejects fabricated citations',()=>{
 });
 test('account isolation, uploads, immutable revisions, risks, CSRF and session revocation',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'contract-docs-test-'));
-  const origin='http://127.0.0.1:3107';const app=await createApp({dir,origin,sandbox:false,codex:fileURLToPath(new URL('./fake-codex.py',import.meta.url))});
+  const origin='http://127.0.0.1:3107';const app=await createApp({dir,origin,sandbox:false,autoTick:false,codexAdmin:'tester_a',codex:fileURLToPath(new URL('./fake-codex.py',import.meta.url))});
   await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${app.server.address().port}/docs/api`;
   t.after(async()=>{await new Promise(resolve=>app.server.close(resolve));await rm(dir,{recursive:true,force:true});});
   async function request(path,data,session='',method='POST',headers={}) {
@@ -58,10 +58,25 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   const rev=await request('/contracts/'+c+'/revisions',{file_ids:[file],note:'Исходная'},a.cookie);assert.equal(rev.status,201);
   assert.equal((await request('/contracts/'+c+'/revisions',{file_ids:[file]},a.cookie)).status,409);
   assert.equal((await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie)).status,409);
-  const authdir=join(dir,'codex',a.data.id);await mkdir(authdir,{recursive:true});await writeFile(join(authdir,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));
+  const legacy=join(dir,'codex',a.data.id);await mkdir(legacy,{recursive:true});await writeFile(join(legacy,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-legacy-only'}}));
+  assert.equal((await request('/codex',undefined,a.cookie)).data.connected,false,'Legacy personal login must not become shared');
+  const authdir=app.runner.home();await mkdir(authdir,{recursive:true});await writeFile(join(authdir,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));
+  assert.equal((await request('/codex',undefined,a.cookie)).data.canManage,true);
+  assert.equal((await request('/codex',undefined,b.cookie)).data.connected,true);
+  assert.equal((await request('/codex',undefined,b.cookie)).data.canManage,false);
+  assert.equal((await request('/codex/login',{},b.cookie)).status,403);
+  assert.equal((await request('/codex/logout',{confirm:'disconnect-application'},b.cookie)).status,403);
   const job=await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie);assert.equal(job.status,202);
   await app.runner.tick();let checked=await request('/contracts/'+c,undefined,a.cookie);const run=checked.data.analyses[0];
   assert.equal(run.status,'complete');assert.ok(run.primary_result&&run.review_result);assert.notEqual(run.primary_result.execution.session,run.review_result.execution.session);
+  const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:'custis',kind:'template'},b.cookie);assert.equal(contractB.status,201);
+  const uploadB=await fetch(base+'/contracts/'+contractB.data.id+'/files',{method:'POST',headers:{Origin:origin,'X-Docs-Request':'1','X-File-Name':'second.docx',Cookie:b.cookie},body:docx('Второй пользователь: сопровождение системы.')});assert.equal(uploadB.status,201);
+  const fileB=await uploadB.json();const revB=await request('/contracts/'+contractB.data.id+'/revisions',{file_ids:[fileB.file.id]},b.cookie);
+  assert.equal((await request('/contracts/'+contractB.data.id+'/analyses',{revision_id:revB.data.id},b.cookie)).status,202);
+  await app.runner.tick();
+  assert.equal((await request('/contracts/'+contractB.data.id,undefined,b.cookie)).data.analyses[0].status,'complete','Second user runs both stages with application credentials');
+  assert.equal((await request('/contracts/'+contractB.data.id,undefined,a.cookie)).status,404);
+  assert.equal((await request('/analyses/'+run.id+'/export',undefined,b.cookie)).status,404);
   const failedFile=await upload(docx('FAIL_REVIEW Договор на тестовые услуги.'),'failure.docx');
   const failedRevision=await request('/contracts/'+c+'/revisions',{file_ids:[failedFile.data.file.id],parent_id:rev.data.id},a.cookie);
   await request('/contracts/'+c+'/analyses',{revision_id:failedRevision.data.id},a.cookie);await app.runner.tick();checked=await request('/contracts/'+c,undefined,a.cookie);
@@ -72,4 +87,5 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   const updated=await request('/contracts/'+c,undefined,a.cookie);assert.equal(updated.data.risks[0].status,'Открыт');assert.equal(updated.data.risks[0].events[0].state,'unverified');
   assert.equal((await request('/me',{current:'valid-passphrase-1',password:'valid-passphrase-new'},a.cookie,'PATCH')).status,200);
   assert.equal((await request('/me',undefined,a.cookie)).status,401);
+  assert.equal((await request('/codex',undefined,b.cookie)).data.connected,true,'Password change does not disconnect the application');
 });

@@ -3,11 +3,31 @@
 import json
 import sys
 import uuid
+import os
+import pathlib
+import time
+
+authdir = pathlib.Path(os.environ['CODEX_HOME'])
+assert authdir.name == 'application', 'Tests must use application-scoped credentials'
+if sys.argv[1] == 'login':
+    with (authdir / 'login-starts.log').open('a') as log:
+        log.write('login\n')
+    print('https://auth.openai.com/codex/device', flush=True)
+    print('TEST-ONLY', flush=True)
+    for attempt in range(200):
+        if (authdir / 'auth.json').exists():
+            sys.exit(0)
+        time.sleep(0.05)
+    sys.exit(1)
+assert json.loads((authdir / 'auth.json').read_text())['tokens']['access_token'] == 'fake-test-only'
 
 prompt = sys.stdin.read()
 payload = prompt.split('ДАННЫЕ КОМПЛЕКТА:\n', 1)[1].split('\nРЕЗУЛЬТАТ АНАЛИТИКА', 1)[0].strip()
 snapshot = json.loads(payload)
 review = 'ЭТАП 2, НЕЗАВИСИМЫЙ РЕВЬЮЕР.' in prompt
+if not review and 'SLOW_PRIMARY' in payload:
+    (authdir / 'primary-started').touch()
+    time.sleep(10)
 if review and 'FAIL_REVIEW' in payload:
     sys.exit(1)
 fields = ['subject','result','term','price','payment','location','acceptance','dependencies','special']
