@@ -158,6 +158,11 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('[data-action=risk-source]');await page.waitForSelector('.source-block.highlight');assert.match(await page.$eval('.source-block.highlight',el=>el.textContent),/6.2/);
   assert.doesNotMatch(await page.$eval('.source-block.highlight small',el=>el.textContent),/\bb\d+\b/);
   await page.screenshot({path:join(screenshotDir,'center-risk-1440.png'),fullPage:true});
+  // В самом реестре видно основание и пункт, не открывая риск.
+  await page.click('[data-action=all-risks]');await page.waitForSelector('.risk-card');
+  assert.match(await page.$eval('.risk-card',el=>el.textContent),/Искусственное замечание для проверки привязки к исходнику\./,'The registry shows the whole detail, not a cut prefix');
+  assert.match(await page.$eval('.risk-card [data-action=risk-source]',el=>el.textContent),/v1.*п\. 6\.2/,'The registry names the clause the risk came from');
+  await page.screenshot({path:join(screenshotDir,'center-registry-1440.png'),fullPage:true});
   await page.click('[data-action=tab][data-value=analysis]');await page.waitForSelector('[data-action=summary-open]');
   await page.click('[data-action=summary-open]');await page.waitForSelector('#summary-text');
   const letter=await page.$eval('#summary-text',el=>el.value);
