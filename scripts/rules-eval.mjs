@@ -68,7 +68,10 @@ for (const name of files) {
       verdict = fired ? 'finding' : others.length ? `другое правило: ${others.join(', ')}` : 'no_finding';
       spent.input += usage?.input_tokens ?? 0; spent.output += usage?.output_tokens ?? 0; spent.ms += ms;
       const allowed = [fixture.rule, ...(item.also || [])];
-      const matched = item.expect === 'finding' ? result.findings.some(f => allowed.includes(f.rule)) : !result.findings.length;
+      // Пример принадлежит своему правилу и проверяет его поведение. Замечание
+      // соседнего правила — сведение, а не провал: иначе каждый отрицательный
+      // пример становится заложником всех остальных десяти правил.
+      const matched = item.expect === 'finding' ? result.findings.some(f => allowed.includes(f.rule)) : !fired;
       if (!matched) { mismatches++; note = fired ? result.findings.find(f => f.rule === fixture.rule).title : (result.findings[0]?.title || item.why); }
     } catch (e) { verdict = 'ошибка'; note = e.message; mismatches++; }
     lines.push(`| ${fixture.rule} | ${index + 1}. ${item.text.slice(0, 60).replace(/\|/g,'/')}… | ${item.expect} | ${verdict} | ${note ? note.slice(0, 90) : '—'} |`);
