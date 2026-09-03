@@ -22,8 +22,9 @@ if sys.argv[1] == 'login':
 assert json.loads((authdir / 'auth.json').read_text())['tokens']['access_token'] == 'fake-test-only'
 
 prompt = sys.stdin.read()
-payload = prompt.split('ДАННЫЕ КОМПЛЕКТА:\n', 1)[1].split('\nРЕЗУЛЬТАТ АНАЛИТИКА', 1)[0].strip()
+payload = prompt.split('ДАННЫЕ КОМПЛЕКТА:\n', 1)[1].split('\nРЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА', 1)[0].strip()
 snapshot = json.loads(payload)
+snapshot.update(json.loads(prompt.split('ПРАВИЛА И ПРОФИЛЬ:\n', 1)[1].split('\nЭТАП', 1)[0].strip()))
 if snapshot.get('temporary'):
     assert '--ephemeral' in sys.argv
     assert 'history.persistence="none"' in sys.argv
@@ -46,8 +47,19 @@ document = snapshot['documents'][0]
 block = document['blocks'][0]
 passport = [{'key':key,'title':key,'value':'Не найдено','status':'missing','sources':[]} for key in fields]
 passport[0].update(value=block['text'], status='extracted', sources=[{'fileId':document['id'],'blockId':block['id'],'quote':block['text']}])
-output = {'summary':'Только тестовая сводка', 'passport':passport, 'findings':[], 'coverage':[{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules'] if r.get('coverage', True)], 'limitations':['Тестовая модель, не настоящий анализ'], 'changes':['Проверен тестовый результат'] if review else []}
-output['findings'] = [{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'proposal':'Уточнить порядок согласования места выполнения работ.','review':'confirmed' if review else 'primary'}]
+coverage = [{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules'] if r.get('coverage', True)]
+limitations = ['Тестовая модель, не настоящий анализ']
+if review:
+    # The reviewer answers with one verdict per finding; the server assembles the result.
+    analyst = json.loads(prompt.split('РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n', 1)[1].strip())
+    output = {'summary':'Только тестовая сводка', 'passport':passport, 'coverage':coverage, 'limitations':limitations,
+              'changes':['Проверен тестовый результат'],
+              'verdicts':[{'id':f['id'],'verdict':'confirmed','reason':'Цитата и пункт совпали с исходником.',
+                           'title':'','description':'','severity':'','proposal':'','sources':[]} for f in analyst['findings']],
+              'added':[]}
+else:
+    output = {'summary':'Только тестовая сводка', 'passport':passport, 'coverage':coverage, 'limitations':limitations, 'changes':[],
+              'findings':[{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'proposal':'Уточнить порядок согласования места выполнения работ.','review':'primary'}]}
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(output)}}))
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))

@@ -3,11 +3,11 @@ import { mkdir, readFile, writeFile, unlink, rm } from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { schema, validateResult } from './schema.mjs';
+import { schema, reviewSchema, validateResult, parseReview } from './schema.mjs';
 import { sharedInstruction, analystInstruction, reviewerInstruction } from './rules.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
-import { resultSources } from './sources.mjs';
+import { resultSources, leanResult } from './sources.mjs';
 
 const disabled = ['shell_tool','unified_exec','apps','plugins','remote_plugin','hooks','multi_agent','multi_agent_v2','browser_use','browser_use_external','computer_use','image_generation','view_image','workspace_dependencies','skill_search','code_mode_host','in_app_browser','in_app_local_automation','goals','sleep_tool'];
 async function stopChild(child) {
@@ -86,12 +86,18 @@ export class CodexRunner {
       originalAuth = await readFile(join(this.home(), 'auth.json'), 'utf8');
       await writeFile(join(isolatedHome, 'auth.json'), originalAuth, { mode: 0o600 });
     }
-    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(schema), { mode: 0o600 });
+    const review = stage === 'review';
+    const base = primary ? leanResult(primary) : null;
+    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(review ? reviewSchema : schema), { mode: 0o600 });
     const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c','web_search="disabled"'];
     for (const feature of disabled) args.push('--disable', feature);
     if (isolatedHome) args.push('-c', 'history.persistence="none"');
     args.push('-');
-    const prompt = `${sharedInstruction}\n${stage === 'primary' ? analystInstruction : reviewerInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(snapshot)}\n${primary ? 'РЕЗУЛЬТАТ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(primary) : ''}`;
+    // Stable first, variable last: instructions, rules and profile repeat across every
+    // run, the documents do not. Whether the provider caches that prefix is measured,
+    // not assumed; the order costs nothing either way.
+    const { profile, rules: ruleSet, instructionVersion: setVersion, kind, ...material } = snapshot;
+    const prompt = `${sharedInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
     const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
     const startedAt = Date.now();
@@ -113,7 +119,8 @@ export class CodexRunner {
           const events = output.split('\n').filter(Boolean).map(x => JSON.parse(x));
           if (events.some(e => e.type === 'turn.failed' || e.type === 'error')) throw new Error('Codex сообщил об ошибке этапа.');
           const messages = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message');
-          const result = resultSources(validateResult(JSON.parse(messages.at(-1)?.item.text || '{}'), snapshot, stage),snapshot,context.temporary?null:analysis);
+          const answer = JSON.parse(messages.at(-1)?.item.text || '{}');
+          const result = resultSources(validateResult(review ? parseReview(base, answer) : answer, snapshot, stage),snapshot,context.temporary?null:analysis);
           const session = events.find(e => e.type === 'thread.started')?.thread_id ?? null;
           const usage = events.find(e => e.type === 'turn.completed')?.usage ?? null;
           // Usage stays null when Codex does not report it: an absent number is not zero.

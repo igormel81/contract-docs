@@ -3,15 +3,50 @@ const string = { type: 'string', maxLength: 15000 };
 const obj = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const arr = (items, maxItems = 100) => ({ type: 'array', items, maxItems });
 const source = obj({ fileId: string, blockId: string, quote: string });
+const severity = { type: 'string', enum: ['high','medium','low'] };
+const passport = arr(obj({ key: { type: 'string', enum: ['subject','result','term','price','payment','location','acceptance','dependencies','special'] }, title: string, value: string, status: { type: 'string', enum: ['extracted','missing','uncertain'] }, sources: arr(source, 20) }), 9);
+const finding = obj({ id: string, rule: string, title: string, severity, description: string, sources: arr(source, 20), proposal: string, review: { type: 'string', enum: ['primary','confirmed','corrected','added'] } });
+const coverage = arr(obj({ rule: string, status: { type: 'string', enum: ['checked','not_applicable','needs_data'] }, note: string }), 20);
 export const schema = obj({
-  summary: string,
-  passport: arr(obj({ key: { type: 'string', enum: ['subject','result','term','price','payment','location','acceptance','dependencies','special'] }, title: string, value: string, status: { type: 'string', enum: ['extracted','missing','uncertain'] }, sources: arr(source, 20) }), 9),
-  findings: arr(obj({ id: string, rule: string, title: string, severity: { type: 'string', enum: ['high','medium','low'] }, description: string, sources: arr(source, 20), proposal: string, review: { type: 'string', enum: ['primary','confirmed','corrected','added'] } }), 60),
-  coverage: arr(obj({ rule: string, status: { type: 'string', enum: ['checked','not_applicable','needs_data'] }, note: string }), 10),
+  summary: string, passport, findings: arr(finding, 60), coverage,
   limitations: arr(string, 30), changes: arr(string, 100)
 });
+// The reviewer answers about the analyst's findings instead of retyping them: one
+// verdict per finding. Re-emitting a confirmed finding word for word costs the most
+// expensive tokens there are and proves nothing.
+export const reviewSchema = obj({
+  summary: string, passport,
+  verdicts: arr(obj({ id: string, verdict: { type: 'string', enum: ['confirmed','corrected','rejected'] }, reason: string,
+    title: string, description: string, severity: { type: 'string', enum: ['','high','medium','low'] }, proposal: string, sources: arr(source, 20) }), 60),
+  added: arr(finding, 20), coverage,
+  limitations: arr(string, 30), changes: arr(string, 100)
+});
+export function assembleReview(primary, delta) {
+  const byId = new Map(primary.findings.map(f => [f.id, f]));
+  const ids = new Set(delta.verdicts.map(v => v.id));
+  if (ids.size !== delta.verdicts.length || ids.size !== byId.size || delta.verdicts.some(v => !byId.has(v.id)))
+    throw new Error('Ревьюер должен вынести ровно одно решение по каждому замечанию аналитика.');
+  const findings = [], changes = [...delta.changes];
+  for (const item of delta.verdicts) {
+    const base = byId.get(item.id);
+    if (item.verdict === 'rejected') { changes.push(`Отклонено ревьюером: ${base.title}. ${item.reason}`); continue; }
+    if (item.verdict === 'confirmed') { findings.push({ ...base, review: 'confirmed' }); continue; }
+    findings.push({ ...base, title: item.title || base.title, description: item.description || base.description,
+      severity: item.severity || base.severity, proposal: item.proposal || base.proposal,
+      sources: item.sources.length ? item.sources : base.sources, review: 'corrected' });
+    changes.push(`Исправлено ревьюером: ${item.title || base.title}. ${item.reason}`);
+  }
+  for (const item of delta.added) findings.push({ ...item, review: 'added' });
+  return { summary: delta.summary, passport: delta.passport, findings, coverage: delta.coverage, limitations: delta.limitations, changes };
+}
 export const legalLimitation = 'Правовая экспертиза не выполнялась: проверенная нормативная база не подключена, правовые выводы требуют юриста.';
-const validate = new Ajv({ allErrors: true }).compile(schema);
+const ajv = new Ajv({ allErrors: true });
+const validate = ajv.compile(schema);
+const validateDelta = ajv.compile(reviewSchema);
+export function parseReview(primary, delta) {
+  if (!validateDelta(delta)) throw new Error('Ответ ревьюера не соответствует структуре решений.');
+  return assembleReview(primary, delta);
+}
 const normalized = value => value.replace(/\s+/g, ' ').trim();
 export function validateResult(result, snapshot, stage) {
   if (!validate(result)) throw new Error('Ответ агента не соответствует структуре результата.');

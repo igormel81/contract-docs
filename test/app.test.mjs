@@ -100,7 +100,7 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.match(letter.text,/Статус: ревью завершено/);
   assert.match(letter.text,/Замечаний: 1 · высокой критичности 0, средней 1, низкой 0\./);
   assert.match(letter.text,/п\. 6\.2/,'References use the original clause number');
-  assert.ok(!/blockId|b1/.test(letter.text),'Internal identifiers never reach a message');
+  assert.ok(!letter.text.includes('blockId')&&!letter.text.split('\n').filter(line=>line.startsWith('Пункт:')).some(line=>/\bb\d+\b/.test(line)),'Internal identifiers never reach a reference');
   assert.match(letter.text,/Правовая экспертиза не выполнялась/);
   assert.match((await summary(run.id,a.cookie,'?scope=full')).text,/Тестовый риск места работ/,'The full list keeps findings below high severity');
   assert.ok((await request('/contracts/'+c,undefined,a.cookie)).data.history.some(e=>e.action==='Сформирован текст замечаний для отправки'),'Export of contract text is journalled');

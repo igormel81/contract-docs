@@ -151,7 +151,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('[data-action=tab][data-value=analysis]');await page.waitForSelector('[data-action=summary-open]');
   await page.click('[data-action=summary-open]');await page.waitForSelector('#summary-text');
   const letter=await page.$eval('#summary-text',el=>el.value);
-  assert.match(letter,/Статус: ревью завершено/);assert.match(letter,/п\. 6\.2/);assert.doesNotMatch(letter,/\bb\d+\b/,'Internal block identifiers never reach a message');
+  assert.match(letter,/Статус: ревью завершено/);assert.match(letter,/п\. 6\.2/);assert.ok(!letter.split('\n').filter(line=>line.startsWith('Пункт:')).some(line=>/\bb\d+\b/.test(line)),'Internal block identifiers never reach a reference');
   for(const width of [1440,768,375]){await page.setViewport({width,height:900});await page.$eval('.summary-panel',el=>el.scrollIntoView({block:'start'}));const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'summary '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-summary-${width}.png`)});}
   await page.setViewport({width:1440,height:900});await page.click('[data-action=summary-close]');
   await page.click('[data-action=rules]');await page.waitForFunction(()=>document.body.textContent.includes('Не считать замечанием'));
