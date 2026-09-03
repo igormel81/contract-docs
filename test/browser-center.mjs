@@ -102,48 +102,54 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await assertNeutralInterface();
   await page.click('[data-action=cancel-form]');
   const originalCount=app.db.prepare('SELECT count(*) n FROM analyses').get().n;
+  await page.click('[data-action=tab][data-value=analysis]');
+  await page.waitForSelector('section.panel [data-form=recommendation]');
   await page.$eval('[data-form=recommendation] textarea',el=>{el.value='Уточнить оплату по п. 6.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.select('[data-form=recommendation] select','planned');
-  await page.click('[data-action=analysis-layout]');
+  // Черновик рекомендации переживает переключение разделов в одном меню.
+  await page.click('[data-action=tab][data-value=passport]');
+  await page.waitForSelector('.passport-compact');
+  await page.click('[data-action=tab][data-value=analysis]');
   await page.waitForSelector('section.panel .analysis-result');
   const originalKey=await page.$eval('.analysis-result',el=>el.dataset.resultKey);
-  assert.equal(await page.evaluate(()=>document.activeElement?.dataset.action),'analysis-layout');
   assert.equal(await page.$$eval('[data-form=recommendation]',els=>els.length),1);
   assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2');
   assert.equal(await page.$eval('[data-form=recommendation] select',el=>el.value),'planned');
+  // Ссылка на пункт открывает его в спутнике и не уводит из раздела.
   await page.click('section.panel .finding [data-action=source]');
   await page.waitForSelector('aside .source-block.highlight');
-  assert.ok(await page.$('section.panel .analysis-result'));
+  assert.ok(await page.$('section.panel .analysis-result'),'Section stays put when a clause opens beside it');
   assert.match(await page.$eval('aside .source-block.highlight',el=>el.textContent),/6.2/);
-  await page.click('[data-action=analysis-layout]');
+  // В разделе «Документ» спутник показывает замечания по этому документу.
+  await page.click('[data-action=tab][data-value=document]');
   await page.waitForSelector('aside .analysis-result');
-  assert.ok(await page.$('.passport-compact'));
-  assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2');
+  assert.ok(await page.$('section.panel .document'));
+  assert.equal(await page.$$eval('[data-action=tab]',els=>els.filter(el=>el.textContent.startsWith('Анализ')).length),1,'A section appears in the menu once');
   await page.click('[data-action=tab][data-value=analysis]');
   await page.waitForSelector('section.panel .analysis-result');
+  assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2');
   await page.click('[data-form=recommendation] [type=submit]');
   await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('Решение сохранено'));
   assert.equal(app.db.prepare('SELECT text FROM recommendations').get().text,'Уточнить оплату по п. 6.2');
   assert.equal(app.db.prepare('SELECT count(*) n FROM analyses').get().n,originalCount);
   assert.equal(await page.$eval('.analysis-result',el=>el.dataset.resultKey),originalKey);
-  await page.click('[data-action=right][data-value=history]');
+  await page.click('[data-action=tab][data-value=history]');
   await page.click('[data-action=run]');
   await page.waitForSelector('section.panel .analysis-result');
   assert.equal(await page.$eval('.analysis-result',el=>el.dataset.resultKey),originalKey);
-  assert.equal(await page.$('aside .source-block.highlight'),null);
   await page.click('section.panel .finding [data-action=source]');
   await page.waitForSelector('aside .source-block.highlight');
-  for(const width of [1440,768,375]){await page.setViewport({width,height:900});const size=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));if(size.sw>size.w+1){console.log(size,await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(e=>e.getBoundingClientRect().right>innerWidth+1).map(e=>({tag:e.tagName,cls:e.className,w:e.getBoundingClientRect().width,right:e.getBoundingClientRect().right})).slice(0,20)));await page.screenshot({path:join(screenshotDir,'center-overflow.png'),fullPage:true});}assert.ok(size.sw<=size.w+1,JSON.stringify(size));if(width===1440)assert.ok(size.sh<=size.h+1);await page.screenshot({path:join(screenshotDir,`center-saved-${width}.png`),fullPage:true});}
+  for(const width of [1440,768,375]){await page.setViewport({width,height:900});const size=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));if(size.sw>size.w+1){console.log(size);await page.screenshot({path:join(screenshotDir,'center-overflow.png'),fullPage:true});}assert.ok(size.sw<=size.w+1,JSON.stringify(size));if(width===1440)assert.ok(size.sh<=size.h+1);await page.screenshot({path:join(screenshotDir,`center-saved-${width}.png`),fullPage:true});}
   await page.setViewport({width:1440,height:900});
-  await page.click('[data-action=right][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
-  assert.match(await page.$eval('[data-action=right][data-value=risks]',el=>el.textContent),/Риски · 1/,'The tab counts candidates waiting for a decision');
+  await page.click('[data-action=tab][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
+  assert.match(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent),/Риски · 1/,'The menu counts candidates waiting for a decision');
   for(const width of [1440,375]){await page.setViewport({width,height:900});await page.screenshot({path:join(screenshotDir,`center-candidates-${width}.png`),fullPage:true});}
   await page.setViewport({width:1440,height:900});
-  await page.click('aside [data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');
+  await page.click('section.panel [data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');
   await page.click('[data-form=risk] [type=submit]');assert.ok(await page.$('[data-form=risk]'),'Risk severity is confirmed explicitly, never copied from the finding');
   await page.select('[data-form=risk] select[name=severity]','high');
   await page.click('[data-form=risk] [type=submit]');await page.waitForSelector('[data-action=risk-source]');
-  await page.waitForFunction(()=>!document.querySelector('[data-action=right][data-value=risks]').textContent.includes('·'));
+  await page.waitForFunction(()=>!document.querySelector('[data-action=tab][data-value=risks]').textContent.includes('·'));
   assert.match(await page.$eval('[data-action=risk-source]',el=>el.textContent),/v1.*п. 6.2/);
   await page.click('[data-action=risk-source]');await page.waitForSelector('.source-block.highlight');assert.match(await page.$eval('.source-block.highlight',el=>el.textContent),/6.2/);
   assert.doesNotMatch(await page.$eval('.source-block.highlight small',el=>el.textContent),/\bb\d+\b/);
@@ -156,7 +162,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.setViewport({width:1440,height:900});await page.click('[data-action=summary-close]');
   await page.click('[data-action=rules]');await page.waitForFunction(()=>document.body.textContent.includes('Не считать замечанием'));
   for(const width of [1440,375]){await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'rules '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-rules-${width}.png`)});}
-  await page.setViewport({width:1440,height:900});await page.click('[data-action=right][data-value=history]');await page.waitForFunction(()=>document.body.textContent.includes('Аналитик:'));
+  await page.setViewport({width:1440,height:900});await page.click('[data-action=tab][data-value=history]');await page.waitForFunction(()=>document.body.textContent.includes('Аналитик:'));
   await page.screenshot({path:join(screenshotDir,'center-history-1440.png')});
   await page.setViewport({width:1440,height:900});
   assert.deepEqual(errors,[]);

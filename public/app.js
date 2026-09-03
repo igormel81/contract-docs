@@ -3,7 +3,7 @@ import { sourceLabel, documentText, compactPassport, locationLabel, findingKey, 
 import { messageParts } from './summary.js';
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const state = { user:null, boot:null, contract:null, contractId:null, revisionId:null, runId:null, center:'upload', right:'analysis', kind:'contract', customer:'', queues:new Map(), selections:new Map(), source:null, risk:null, form:null, loginMode:'login', query:'', drafts:new Map(), analysisReturn:'passport', summary:null };
+const state = { user:null, boot:null, contract:null, contractId:null, revisionId:null, runId:null, center:'upload', kind:'contract', customer:'', queues:new Map(), selections:new Map(), source:null, risk:null, form:null, loginMode:'login', query:'', drafts:new Map(), summary:null };
 const labels = { ...stageLabels,...severityLabels,ready:'Текст извлечён',processing:'Обработка',extracted:'Из документа',missing:'Не найдено',uncertain:'Нужно уточнить',open:'Открыто',verification:'На проверке',done:'Выполнено',unverified:'Сигнал · не проверен',confirmed:'Подтверждено',dismissed:'Не подтвердилось',recorded:'Зафиксировано' };
 const btn = (title, action, value='', cls='', disabled=false) => `<button type="button" data-action="${action}" data-value="${esc(value)}" class="${cls}" ${disabled?'disabled':''}>${title}</button>`;
 const badge = (title, cls='') => `<span class="badge ${cls}">${esc(title)}</span>`;
@@ -21,7 +21,7 @@ let noticeTimer, focusSummary=false;
 function notice(text) { $('#notice').textContent=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>$('#notice').textContent='',7000); }
 async function refreshBoot() { state.boot=await api('/bootstrap'); }
 async function refreshContract() { if(state.contractId){state.contract=await api('/contracts/'+state.contractId); if(!state.contract.revisions.some(r=>r.id===state.revisionId))state.revisionId=state.contract.revisions[0]?.id||null;} }
-async function openContract(id) { state.sourceDocuments=null;state.analysisReturn='passport';state.summary=null;state.contractId=id;state.revisionId=null;state.runId=null;state.source=null;state.risk=null;state.form=null;await refreshContract();state.center=state.contract.revisions.length?'passport':'upload';history.replaceState(null,'','#'+id);render(); }
+async function openContract(id) { state.sourceDocuments=null;state.summary=null;state.contractId=id;state.revisionId=null;state.runId=null;state.source=null;state.risk=null;state.form=null;await refreshContract();state.center=state.contract.revisions.length?'passport':'upload';history.replaceState(null,'','#'+id);render(); }
 function summaryPanel(a) {
   const s=state.summary; if(!s||s.analysisId!==a.id)return '';
   const parts=messageParts(s.text), manager=state.contract.manager;
@@ -61,7 +61,7 @@ function uploadView() {
 function documentView() {
   const files=state.sourceDocuments||state.contract.files; const file=files.find(f=>f.id===state.source?.fileId)||files.find(f=>revision()?.file_ids.includes(f.id))||files[0];
   if(!file)return `<div class="empty"><h2>Исходников пока нет</h2><p>Загрузите основной договор и приложения.</p>${btn('Загрузить','tab','upload','primary')}</div>`;
-  return `<div class="flow"><div class="row"><label class="grow">Документ<select id="document-select">${files.map(f=>`<option value="${f.id}" ${f.id===file.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select></label><a href="/docs/api/files/${file.id}/download" class="compact-action">Скачать оригинал</a></div>${state.source?.blockId&&state.center!=='analysis'?btn('Назад к паспорту','tab','passport','quiet'):''}<small>${state.source?.riskId?'Пункт и редакция, зафиксированные при регистрации риска.':state.sourceDocuments?'Исходник выбранного анализа. Обновление структуры файла не меняет этот снимок.':'Структура документа с исходной нумерацией. Нераспознанные номера не подставляются.'}</small>${!state.sourceDocuments&&file.extraction?.extractor!=='clauses-v2'?btn('Обновить структуру','refresh-structure',file.id,'quiet'):''}${file.extraction?.warnings?.length?`<div class="warning">${file.extraction.warnings.map(esc).join('<br>')}</div>`:''}${documentText(file,state.source,esc)}</div>`;
+  return `<div class="flow"><div class="row"><label class="grow">Документ<select id="document-select">${files.map(f=>`<option value="${f.id}" ${f.id===file.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select></label><a href="/docs/api/files/${file.id}/download" class="compact-action">Скачать оригинал</a></div><small>${state.source?.riskId?'Пункт и редакция, зафиксированные при регистрации риска.':state.sourceDocuments?'Исходник выбранного анализа. Обновление структуры файла не меняет этот снимок.':'Структура документа с исходной нумерацией. Нераспознанные номера не подставляются.'}</small>${!state.sourceDocuments&&file.extraction?.extractor!=='clauses-v2'?btn('Обновить структуру','refresh-structure',file.id,'quiet'):''}${file.extraction?.warnings?.length?`<div class="warning">${file.extraction.warnings.map(esc).join('<br>')}</div>`:''}${documentText(file,state.source,esc)}</div>`;
 }
 function passportView() {
   const r=result(),a=analysis();
@@ -116,19 +116,28 @@ function centerView() {
   if(state.center==='settings')return settingsView();
   if(state.center==='rules')return `<div class="flow"><h2>Критерии проверки</h2><p class="muted">Рекомендательный разбор для подготовки к переговорам, а не заключение о соответствии: правила формулируют вопросы и предложения, решение принимает сотрудник. Аналитик ищет полноту, ревьюер проверяет по оригиналам. Обе компании находятся в Москве. У каждого критерия своя версия: при её изменении прежние анализы не переписываются, а помечаются в истории.</p>${state.boot.rules.map(r=>`<section class="details-field"><div class="row">${badge(r.id)}${badge('версия '+r.version)}${r.coverage===false?badge('вне покрытия','medium'):''}</div><h3>${esc(r.title)}</h3><p>${esc(r.instruction)}</p>${r.avoid?`<p class="muted"><strong>Не считать замечанием:</strong> ${esc(r.avoid)}</p>`:''}</section>`).join('')}</div>`;
   if(!state.contract)return `<div class="empty"><span class="empty-mark">Рабочее место</span><h2>Начните с заказчика и договора</h2><p>Здесь будут оригиналы, паспорт, история анализа и риски. Демонстрационных договоров нет — все записи создаёте вы.</p>${btn('Создать заказчика','new-customer','','primary')}</div>`;
-  return ({upload:uploadView,document:documentView,passport:passportView,versions:versionsView,compare:compareView,analysis:analysisView}[state.center]||passportView)();
+  return ({upload:uploadView,document:documentView,passport:passportView,versions:versionsView,compare:compareView,analysis:analysisView,risks:riskView,history:historyView}[state.center]||passportView)();
 }
-function analysisSourceView() {
-  return state.source ? documentView() : '<div class="empty"><h3>Источник замечания</h3><p>Выберите ссылку на пункт в результатах анализа. Здесь откроется его текст с исходной нумерацией.</p></div>';
-}
-function analysisLayoutButton() {
-  return btn(state.center==='analysis'?'В боковую панель':'В центр','analysis-layout','','compact-action');
+// Вторая область — спутник, а не второй раздел: она показывает то, что парно
+// открытому разделу. Своего меню у неё нет, поэтому одно и то же содержимое
+// больше не живёт в двух местах под разными подписями.
+const companions = {
+  document:{title:'Замечания по документу',view:()=>analysisView()},
+  upload:{title:'Состав редакции',view:()=>state.contract.revisions.length?versionsView():'<div class="empty"><p>Зафиксируйте комплект — здесь появятся редакции.</p></div>'},
+  versions:{title:'Документ',view:()=>documentView()},
+  compare:{title:'Документ',view:()=>documentView()}
+};
+function companionTitle() { return companions[state.center]?.title || 'Источник'; }
+function companionView() {
+  const pair=companions[state.center];
+  if(pair)return pair.view();
+  return state.source ? documentView() : `<div class="empty"><h3>Источник</h3><p>Выберите ссылку на пункт — в паспорте, замечании или риске. Здесь откроется его текст с исходной нумерацией.</p></div>`;
 }
 function analysisView() {
   const a=analysis(),r=result();
-  if(!a)return `<div class="flow analysis-result">${analysisLayoutButton()}<div class="empty"><h3>Проверка в два этапа</h3><p>Аналитик выявляет условия и риски. Ревьюер сверяет выводы и предложения с исходниками.</p>${state.boot.codex.connected?'':btn(state.boot.codex.canManage?'Подключить общий Codex':'Статус общего Codex','settings','','primary')}</div></div>`;
+  if(!a)return `<div class="flow analysis-result"><div class="empty"><h3>Проверка в два этапа</h3><p>Аналитик выявляет условия и риски. Ревьюер сверяет выводы и предложения с исходниками.</p>${state.boot.codex.connected?'':btn(state.boot.codex.canManage?'Подключить общий Codex':'Статус общего Codex','settings','','primary')}</div></div>`;
   const rev=state.contract.revisions.find(v=>v.id===a.revision_id);
-  return `<div class="flow analysis-result" data-result-key="${a.id}"><div class="row between"><h2>Анализ и рекомендации</h2>${analysisLayoutButton()}</div><div class="row between">${badge(labels[a.status],a.status==='error'?'high':a.status==='complete'?'good':'medium')}<small>v${rev?.number} · ${date(a.created)}</small></div>${a.revision_id!==state.revisionId?'<div class="warning">Этот анализ относится к другой редакции.</div>':''}<div class="step-line"><div class="step ${a.primary_result?'done':a.status==='primary'?'running':''}">1. Аналитик<br>${a.primary_result?'Результат сохранён':'Ожидается'}</div><div class="step ${a.review_result?'done':a.status==='review'?'running':''}">2. Ревьюер<br>${a.review_result?'Проверка завершена':'Не завершено'}</div></div>${a.error?`<div class="error">${esc(a.error)}</div>${['error','interrupted'].includes(a.status)?btn('Повторить этап','retry-analysis',a.id):''}`:''}${['queued','primary','review'].includes(a.status)?btn('Отменить анализ','cancel-analysis',a.id,'quiet'):''}${r?`<div class="warning">${r.limitations.map(esc).join('<br>')}</div>${r.findings.length?'<p class="muted">Решение по каждому замечанию сохраняется в план правок. План правок не означает согласие заказчика.</p>'+r.findings.map((f,index)=>{const draftKey=a.id+':'+f.id,edit=state.drafts.get(draftKey)||state.contract.recommendations.find(x=>x.analysis_id===a.id&&x.finding_id===f.id);return `<article class="finding"><div class="row">${badge(labels[f.severity],f.severity)}${badge(f.rule)}${badge(f.review==='primary'?'Без ревью':f.review==='added'?'Добавлено ревьюером':f.review==='corrected'?'Исправлено':'Подтверждено')}${state.contract.kind==='contract'?btn('В реестр рисков','finding-risk',index,'compact-action'):''}</div><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p>${sources(f.sources)}<form data-form="recommendation" data-draft-key="${esc(draftKey)}" data-index="${index}" class="flow"><label>Предлагаемая формулировка<textarea name="text" required maxlength="15000">${esc(edit?.text??f.proposal)}</textarea></label>${select('status','Решение',[['draft','Черновик'],['planned','В плане правок'],['rejected','Отклонено']],edit?.status||'draft')}<div class="error" role="alert"></div><div class="row"><button type="submit" class="compact-action">Сохранить решение</button>${btn(edit?.text||f.proposal?'Предложить заново':'Предложить формулировку','propose',index,'quiet compact-action')}</div></form></article>`;}).join(''):'<p>Замечания не сформированы. Учитывайте ограничения и покрытие правил ниже.</p>'}<details><summary>Покрытие критериев</summary>${r.coverage.map(c=>`<p><strong>${esc(c.rule)}</strong> · ${esc(coverageLabels[c.status]||c.status)}<br>${esc(c.note)}</p>`).join('')}</details>${r.changes.length?`<details><summary>Изменения ревьюера</summary>${r.changes.map(x=>`<p>${esc(x)}</p>`).join('')}</details>`:''}<div class="row">${btn('Текст для менеджера','summary-open','','compact-action')}<a class="compact-action" href="/docs/api/analyses/${a.id}/export">Скачать результат JSON</a></div>${summaryPanel(a)}`:'<p class="muted">Результат появится после завершения этапа. Можно работать с другими документами.</p>'}</div>`;
+  return `<div class="flow analysis-result" data-result-key="${a.id}"><h2>Анализ и рекомендации</h2><div class="row between">${badge(labels[a.status],a.status==='error'?'high':a.status==='complete'?'good':'medium')}<small>v${rev?.number} · ${date(a.created)}</small></div>${a.revision_id!==state.revisionId?'<div class="warning">Этот анализ относится к другой редакции.</div>':''}<div class="step-line"><div class="step ${a.primary_result?'done':a.status==='primary'?'running':''}">1. Аналитик<br>${a.primary_result?'Результат сохранён':'Ожидается'}</div><div class="step ${a.review_result?'done':a.status==='review'?'running':''}">2. Ревьюер<br>${a.review_result?'Проверка завершена':'Не завершено'}</div></div>${a.error?`<div class="error">${esc(a.error)}</div>${['error','interrupted'].includes(a.status)?btn('Повторить этап','retry-analysis',a.id):''}`:''}${['queued','primary','review'].includes(a.status)?btn('Отменить анализ','cancel-analysis',a.id,'quiet'):''}${r?`<div class="warning">${r.limitations.map(esc).join('<br>')}</div>${r.findings.length?'<p class="muted">Решение по каждому замечанию сохраняется в план правок. План правок не означает согласие заказчика.</p>'+r.findings.map((f,index)=>{const draftKey=a.id+':'+f.id,edit=state.drafts.get(draftKey)||state.contract.recommendations.find(x=>x.analysis_id===a.id&&x.finding_id===f.id);return `<article class="finding"><div class="row">${badge(labels[f.severity],f.severity)}${badge(f.rule)}${badge(f.review==='primary'?'Без ревью':f.review==='added'?'Добавлено ревьюером':f.review==='corrected'?'Исправлено':'Подтверждено')}${state.contract.kind==='contract'?btn('В реестр рисков','finding-risk',index,'compact-action'):''}</div><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p>${sources(f.sources)}<form data-form="recommendation" data-draft-key="${esc(draftKey)}" data-index="${index}" class="flow"><label>Предлагаемая формулировка<textarea name="text" required maxlength="15000">${esc(edit?.text??f.proposal)}</textarea></label>${select('status','Решение',[['draft','Черновик'],['planned','В плане правок'],['rejected','Отклонено']],edit?.status||'draft')}<div class="error" role="alert"></div><div class="row"><button type="submit" class="compact-action">Сохранить решение</button>${btn(edit?.text||f.proposal?'Предложить заново':'Предложить формулировку','propose',index,'quiet compact-action')}</div></form></article>`;}).join(''):'<p>Замечания не сформированы. Учитывайте ограничения и покрытие правил ниже.</p>'}<details><summary>Покрытие критериев</summary>${r.coverage.map(c=>`<p><strong>${esc(c.rule)}</strong> · ${esc(coverageLabels[c.status]||c.status)}<br>${esc(c.note)}</p>`).join('')}</details>${r.changes.length?`<details><summary>Изменения ревьюера</summary>${r.changes.map(x=>`<p>${esc(x)}</p>`).join('')}</details>`:''}<div class="row">${btn('Текст для менеджера','summary-open','','compact-action')}<a class="compact-action" href="/docs/api/analyses/${a.id}/export">Скачать результат JSON</a></div>${summaryPanel(a)}`:'<p class="muted">Результат появится после завершения этапа. Можно работать с другими документами.</p>'}</div>`;
 }
 function riskView() {
   const c=state.contract;if(!c)return '<p class="muted">Выберите договор.</p>';
@@ -159,11 +168,11 @@ function render() {
   if(!state.boot)return;
   const oldResult=$('.analysis-result'),oldKey=oldResult?.dataset.resultKey,oldScroll=oldResult?.closest('.content')?.scrollTop;
   const c=state.contract;
-  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Работа с договором">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['upload','Загрузка'],['versions','Редакции']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><nav class="tabs" aria-label="Результаты проверки">${[['analysis',state.center==='analysis'?'Источник':'Анализ'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'right',v,state.right===v?'active':'',!c)).join('')}</nav><div class="content">${c?({analysis:state.center==='analysis'?analysisSourceView:analysisView,risks:riskView,history:historyView}[state.right])():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.7 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
+  $('#app').innerHTML=`<header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">Д</span>Договоры и риски</div><div class="row">${btn(state.boot.codex.connected?'Codex · общий вход':'Codex · не подключён','settings','','quiet')}<small>${esc(state.user.login)}</small>${btn('Выйти','logout','','quiet')}</div></header><div class="workspace">${sidebar()}<main id="main" class="main ${state.center==='quick'?'quick-main':''}">${c?context():`<header class="context"><h1>${state.center==='settings'?'Настройки':'Договоры и шаблоны'}</h1></header>`}<div class="panels"><section class="panel"><nav class="tabs" aria-label="Разделы договора">${[['passport','Паспорт'],['analysis','Анализ'],['document','Документ'],['upload','Загрузка'],['versions','Редакции'],['risks','Риски'+(c&&candidates().length?' · '+candidates().length:'')],['history','История']].map(([v,t])=>btn(t,'tab',v,state.center===v?'active':'',!c)).join('')}</nav><div class="content">${centerView()}</div></section><aside class="panel inspector"><div class="tabs row"><span>${c?esc(companionTitle()):'Рабочая область'}</span></div><div class="content">${c?companionView():'<div class="empty"><h3>От условий к решениям</h3><p>Здесь появятся замечания, предложенные формулировки и риски выбранного договора.</p></div>'}</div></aside></div></main></div><footer class="footer">Пилот 0.1.7 · оригиналы и история хранятся на сервере · AI-выводы требуют проверки сотрудником</footer>`;
   if(state.center==='quick'){$('#main').innerHTML=quick.view();$('.footer').textContent='Разовая проверка: без записи в хранилище · результат требует проверки сотрудником';}
   const newResult=$('.analysis-result');
   if(oldKey&&newResult?.dataset.resultKey===oldKey)newResult.closest('.content').scrollTop=oldScroll;
-  if(state.source?.blockId&&['document','analysis'].includes(state.center))requestAnimationFrame(()=>$('#source-'+state.source.blockId)?.scrollIntoView({block:'nearest'}));
+  if(state.source?.blockId)requestAnimationFrame(()=>$('#source-'+state.source.blockId)?.scrollIntoView({block:'nearest'}));
   // A panel that opens below the fold reads as a button that did nothing.
   if(focusSummary){focusSummary=false;requestAnimationFrame(()=>{$('.summary-panel')?.scrollIntoView({block:'nearest'});const area=$('#summary-text');if(area){area.focus({preventScroll:true});area.select();}});}
 }
@@ -195,17 +204,7 @@ document.addEventListener('click',async event=>{
     if(action==='logout'){await api('/logout',{});state.sourceDocuments=null;state.user=null;state.boot=null;state.contract=null;state.queues.clear();state.selections.clear();render();return;}
     if(action==='open-contract'){await openContract(value);return;}
     if(action==='kind'){state.kind=value;state.customer='';}
-    if(action==='tab'){if(value==='analysis'&&state.center!=='analysis'){state.analysisReturn=state.center;state.right='analysis';}if(value==='document'){state.sourceDocuments=null;state.source=null;}state.center=value;state.form=null;}
-    if(action==='analysis-layout'){
-      const scrollTop=button.closest('.content')?.scrollTop||0;
-      if(state.center==='analysis')state.center=state.analysisReturn||'passport';
-      else {state.analysisReturn=state.center;state.center='analysis';}
-      state.right='analysis';state.form=null;render();
-      const control=$('[data-action="analysis-layout"]');control?.focus({preventScroll:true});
-      if(control)control.closest('.content').scrollTop=scrollTop;
-      return;
-    }
-    if(action==='right'){state.right=value;state.form=null;}
+    if(action==='tab'){if(value==='document'&&state.center!=='analysis'){state.sourceDocuments=null;state.source=null;}state.center=value;state.form=null;}
     if(action==='settings'){state.center='settings';state.form=null;state.boot.codex=await api('/codex');}
     if(action==='rules'){state.center='rules';state.form=null;}
     if(action==='new-customer')state.form={type:'customer'};
@@ -216,18 +215,18 @@ document.addEventListener('click',async event=>{
     if(action==='retry-upload'){await uploadRow(queue()[Number(value)],state.contractId);return;}
     if(action==='retry-extract'){await api('/files/'+value+'/retry',{});await refreshContract();}
     if(action==='file'){state.sourceDocuments=null;state.source={fileId:value};state.center='document';state.form=null;}
-    if(action==='source'){state.source=JSON.parse(value);state.sourceDocuments=state.source.analysisId?(await api('/analyses/'+state.source.analysisId+'/documents')).map(f=>({...f,extraction:f})):null;if(state.center==='analysis')state.right='analysis';else state.center='document';state.form=null;}
+    if(action==='source'){state.source=JSON.parse(value);state.sourceDocuments=state.source.analysisId?(await api('/analyses/'+state.source.analysisId+'/documents')).map(f=>({...f,extraction:f})):null;state.form=null;}
     if(action==='refresh-structure'){if(!confirm('Повторно прочитать структуру оригинала? Старые анализы и их ссылки не изменятся. Для новых выводов запустите новый анализ.')){button.disabled=false;return;}await api('/files/'+value+'/structure',{});await refreshContract();notice('Структура обновлена. Старые результаты не изменены.');}
-    if(action==='risk-source'){const [riskId,index]=JSON.parse(value),ref=state.contract.risks.find(r=>r.id===riskId).sources[index];state.source={...ref,riskId};state.sourceDocuments=[{id:ref.fileId,name:ref.fileName,extraction:{blocks:[ref.block],warnings:[]}}];state.center='document';state.form=null;}
+    if(action==='risk-source'){const [riskId,index]=JSON.parse(value),ref=state.contract.risks.find(r=>r.id===riskId).sources[index];state.source={...ref,riskId};state.sourceDocuments=[{id:ref.fileId,name:ref.fileName,extraction:{blocks:[ref.block],warnings:[]}}];state.form=null;}
     if(action==='revision'){state.source=null;state.sourceDocuments=null;state.revisionId=value;state.runId=null;state.selections.delete(state.contractId);state.center='passport';}
     if(action==='compare'){state.center='compare';state.form=null;}
     if(action==='compare-filter')state.compareOnlyChanged=state.compareOnlyChanged===false;
     if(action==='effective')state.form={type:'effective',id:value};
     if(action==='stage')state.form={type:'stage'};
-    if(action==='analyze'){const started=await api('/contracts/'+state.contractId+'/analyses',{revision_id:state.revisionId});state.source=null;state.sourceDocuments=null;state.runId=null;state.right='analysis';await refreshContract();notice(started.note?'Комплект в очереди. '+started.note:'Комплект поставлен в очередь анализа.');}
-    if(action==='retry-analysis'){await api('/analyses/'+value+'/retry',{});await refreshContract();state.source=null;state.sourceDocuments=null;state.runId=state.contract.analyses[0].id;notice('Создана новая попытка. История сохранена.');}
+    if(action==='analyze'){const started=await api('/contracts/'+state.contractId+'/analyses',{revision_id:state.revisionId});state.source=null;state.sourceDocuments=null;state.runId=null;state.center='analysis';await refreshContract();notice(started.note?'Комплект в очереди. '+started.note:'Комплект поставлен в очередь анализа.');}
+    if(action==='retry-analysis'){await api('/analyses/'+value+'/retry',{});await refreshContract();state.source=null;state.sourceDocuments=null;state.runId=state.contract.analyses[0].id;state.center='analysis';notice('Создана новая попытка. История сохранена.');}
     if(action==='cancel-analysis'){await api('/analyses/'+value+'/cancel',{});await refreshContract();}
-    if(action==='run'){state.source=null;state.sourceDocuments=null;state.runId=value;state.right='analysis';}
+    if(action==='run'){state.source=null;state.sourceDocuments=null;state.runId=value;state.center='analysis';}
     if(action==='summary-open'){await loadSummary(analysis().id,false);focusSummary=true;}
     if(action==='summary-scope'){await loadSummary(state.summary.analysisId,!state.summary.full);focusSummary=true;}
     if(action==='summary-close')state.summary=null;
@@ -252,10 +251,10 @@ document.addEventListener('click',async event=>{
       state.drafts.set(key,{text:answer.proposal,status:saved?.status||'draft'});
       notice(answer.note?'Формулировка предложена. '+answer.note:'Формулировка предложена. Проверьте текст и сохраните решение.');
     }
-    if(action==='new-risk'){state.form={type:'risk'};state.right='risks';}
-    if(action==='dismiss-candidate'){state.form={type:'dismiss',index:Number(value)};state.right='risks';}
+    if(action==='new-risk'){state.form={type:'risk'};state.center='risks';}
+    if(action==='dismiss-candidate'){state.form={type:'dismiss',index:Number(value)};state.center='risks';}
     if(action==='restore-candidate'){await api('/contracts/'+state.contractId+'/dismissed',{key:value,restore:true});await refreshContract();}
-    if(action==='finding-risk'){state.form={type:'risk',finding:result().findings[Number(value)],analysis:analysis().id};state.right='risks';}
+    if(action==='finding-risk'){state.form={type:'risk',finding:result().findings[Number(value)],analysis:analysis().id};state.center='risks';}
     if(action==='risk'){state.risk=value;state.form=null;}
     if(action==='all-risks'){state.risk=null;state.form=null;}
     if(action==='risk-event')state.form={type:'risk-event',kind:value};
