@@ -5,12 +5,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rules } from '../server/rules.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const file = join(resolve(process.env.DOCS_DATA || join(root, 'data')), 'contracts.sqlite');
 const db = new DatabaseSync(file, { readOnly: true });
 const parse = value => { try { return JSON.parse(value); } catch { return null; } };
-const rows = db.prepare('SELECT status,primary_result,review_result,created,updated FROM analyses').all();
+const rows = db.prepare('SELECT id,status,primary_result,review_result,created,updated FROM analyses').all();
 const say = (label, value) => console.log(`  ${label.padEnd(42, '.')} ${value}`);
 
 console.log(`\nБаза: ${file}\n`);
@@ -70,6 +71,26 @@ say('кандидатов отклонено', dismissed);
 const findingsTotal = rows.reduce((sum, run) => sum + (parse(run.review_result || run.primary_result)?.findings.length || 0), 0);
 say('замечаний всего', findingsTotal);
 say('доля замечаний, ставших риском', findingsTotal ? `${Math.round((risks.fromFinding || 0) / findingsTotal * 100)} %` : '—');
+
+console.log('\nПРАВИЛА НА ПРАКТИКЕ');
+const planned = new Set(db.prepare("SELECT analysis_id||':'||finding_id k FROM recommendations WHERE status='planned'").all().map(r => r.k));
+const riskRules = db.prepare('SELECT finding_key FROM risks WHERE finding_key IS NOT NULL').all().map(r => String(r.finding_key).split('|')[0]);
+const perRule = new Map();
+for (const run of rows) {
+  const result = parse(run.review_result || run.primary_result);
+  for (const finding of result?.findings || []) {
+    const stat = perRule.get(finding.rule) || { total: 0, high: 0, planned: 0, risks: 0 };
+    stat.total++; if (finding.severity === 'high') stat.high++;
+    if (planned.has(`${run.id}:${finding.id}`)) stat.planned++;
+    perRule.set(finding.rule, stat);
+  }
+}
+for (const rule of riskRules) { const stat = perRule.get(rule); if (stat) stat.risks++; }
+if (!perRule.size) say('замечаний по правилам', 'нет данных');
+for (const [rule, stat] of [...perRule].sort((a, b) => b[1].total - a[1].total))
+  say(rule, `${stat.total} замечаний (высоких ${stat.high}), в план правок ${stat.planned}, в риски ${stat.risks}`);
+const silent = rules.filter(r => r.coverage !== false && !perRule.has(r.id)).map(r => r.id);
+if (silent.length) say('ни разу не сработали', silent.join(', '));
 
 console.log('\nОГРАНИЧЕНИЯ');
 const limits = new Map();
