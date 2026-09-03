@@ -21,6 +21,8 @@ test('every rule in coverage has fixtures with a case that must not raise a find
       assert.ok(['finding', 'no_finding'].includes(item.expect), `${name}: expect is finding or no_finding`);
       assert.ok(typeof item.text === 'string' && item.text.trim().length >= 20, `${name}: every case needs a readable fragment`);
       assert.ok(typeof item.why === 'string' && item.why.trim().length >= 10, `${name}: every case explains itself`);
+      // Соседнее правило вместо целевого — не промах, если это заранее допущено.
+      for (const neighbour of item.also || []) assert.ok(rules.some(r => r.id === neighbour), `${name}: also points at an existing rule`);
     }
   }
 });
