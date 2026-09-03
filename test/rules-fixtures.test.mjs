@@ -20,6 +20,9 @@ test('every rule in coverage has fixtures with a case that must not raise a find
     for (const item of data.cases) {
       assert.ok(['finding', 'no_finding'].includes(item.expect), `${name}: expect is finding or no_finding`);
       assert.ok(typeof item.text === 'string' && item.text.trim().length >= 20, `${name}: every case needs a readable fragment`);
+      // [параметр] — наша пометка для предлагаемых правок. В тексте договора это
+      // читается как незаполненный срок, и любой отрицательный пример ломается.
+      assert.ok(!item.text.includes('[параметр]'), `${name}: a contract fragment must not carry a proposal placeholder`);
       assert.ok(typeof item.why === 'string' && item.why.trim().length >= 10, `${name}: every case explains itself`);
       // Соседнее правило вместо целевого — не промах, если это заранее допущено.
       for (const neighbour of item.also || []) assert.ok(rules.some(r => r.id === neighbour), `${name}: also points at an existing rule`);
