@@ -18,6 +18,7 @@ export function database(dir) {
     CREATE TABLE IF NOT EXISTS analyses(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), contract_id TEXT REFERENCES contracts(id), revision_id TEXT REFERENCES revisions(id), status TEXT NOT NULL, snapshot TEXT NOT NULL, primary_result TEXT, review_result TEXT, error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS recommendations(id TEXT PRIMARY KEY, analysis_id TEXT REFERENCES analyses(id), finding_id TEXT NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL, updated TEXT NOT NULL, UNIQUE(analysis_id,finding_id));
     CREATE TABLE IF NOT EXISTS risks(id TEXT PRIMARY KEY, contract_id TEXT REFERENCES contracts(id), title TEXT NOT NULL, severity TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL, detail TEXT NOT NULL, origin TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS risk_sources(risk_id TEXT NOT NULL REFERENCES risks(id), position INTEGER NOT NULL, reference TEXT NOT NULL, PRIMARY KEY(risk_id,position));
     CREATE TABLE IF NOT EXISTS risk_events(id TEXT PRIMARY KEY, risk_id TEXT REFERENCES risks(id), kind TEXT NOT NULL, text TEXT NOT NULL, due TEXT, state TEXT NOT NULL, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), contract_id TEXT, action TEXT NOT NULL, detail TEXT NOT NULL, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS throttle(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER NOT NULL);

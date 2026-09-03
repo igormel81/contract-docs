@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm } from 'node:fs/promises';
+import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { schema, validateResult } from './schema.mjs';
 import { sharedInstruction, analystInstruction, reviewerInstruction } from './rules.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
+import { resultSources } from './sources.mjs';
 
 const disabled = ['shell_tool','unified_exec','apps','plugins','remote_plugin','hooks','multi_agent','multi_agent_v2','browser_use','browser_use_external','computer_use','image_generation','view_image','workspace_dependencies','skill_search','code_mode_host','in_app_browser','in_app_local_automation','goals','sleep_tool'];
 async function stopChild(child) {
@@ -64,52 +67,88 @@ export class CodexRunner {
     try {
       const login = this.loginState; this.loginState = null;
       this.db.prepare("UPDATE analyses SET status='cancelled',error='Общее подключение Codex отключено владельцем приложения',updated=? WHERE status IN ('queued','primary','review')").run(now());
+      this.temporary?.cancelAll();
       // Wait for every credential writer to stop before removing the shared login.
       await Promise.all([stopChild(login?.child), stopChild(this.active?.child)]);
       await unlink(join(this.home(), 'auth.json')).catch(e => { if (e.code !== 'ENOENT') throw e; });
     } finally { this.authOperation = null; }
   }
-  async execute(user, analysis, snapshot, stage, primary) {
+  async execute(user, analysis, snapshot, stage, primary, context = {}) {
     const epoch = this.authEpoch;
     if (!(await this.status()).connected) throw new Error('Владелец приложения должен подключить общий Codex через ChatGPT.');
-    const cwd = join(this.dir, 'jobs', analysis, stage); await mkdir(cwd, { recursive: true, mode: 0o700 });
+    const cwd = context.directory || join(this.dir, 'jobs', analysis, stage);
+    const isolatedHome = context.temporary ? join(cwd, 'application') : null;
+    let originalAuth;
+    try {
+    await mkdir(cwd, { recursive: true, mode: 0o700 });
+    if (isolatedHome) {
+      await mkdir(isolatedHome, { recursive: true, mode: 0o700 });
+      originalAuth = await readFile(join(this.home(), 'auth.json'), 'utf8');
+      await writeFile(join(isolatedHome, 'auth.json'), originalAuth, { mode: 0o600 });
+    }
     const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(schema), { mode: 0o600 });
     const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c','web_search="disabled"'];
     for (const feature of disabled) args.push('--disable', feature);
+    if (isolatedHome) args.push('-c', 'history.persistence="none"');
     args.push('-');
     const prompt = `${sharedInstruction}\n${stage === 'primary' ? analystInstruction : reviewerInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(snapshot)}\n${primary ? 'РЕЗУЛЬТАТ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(primary) : ''}`;
-    if (epoch !== this.authEpoch || this.authOperation === 'logout' || !['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status)) throw new Error('Анализ отменён или подключение Codex отключено.');
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.binary, args, { cwd, env: this.env(), stdio: ['pipe','pipe','pipe'] });
+    const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
+    if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
+    return await new Promise((resolve, reject) => {
+      const env = isolatedHome ? { ...this.env(), CODEX_HOME: isolatedHome, CODEX_SQLITE_HOME: isolatedHome, TMPDIR: cwd, XDG_CACHE_HOME: join(cwd,'cache'), RUST_LOG: 'off', OTEL_SDK_DISABLED: 'true' } : this.env();
+      const child = spawn(this.binary, args, { cwd, env, stdio: ['pipe','pipe','pipe'] });
       this.active = { child, user, analysis };
-      let output = '', errorText = '';
-      const timer = setTimeout(() => child.kill('SIGTERM'), 12 * 60000); timer.unref();
-      child.stdout.on('data', chunk => { output += chunk; if (output.length > 4 * 1024 * 1024) child.kill('SIGTERM'); });
+      let output = '', errorText = '', exceeded = false, timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; void stopChild(child); }, 12 * 60000); timer.unref();
+      child.stdout.on('data', chunk => { if(exceeded)return;output += chunk; if (output.length > 4 * 1024 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
       child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-10000); });
       child.stdin.on('error', () => {}); child.stdin.end(prompt);
       child.on('error', e => { clearTimeout(timer); reject(new Error('Исполнитель Codex недоступен.')); });
       child.on('close', code => {
         clearTimeout(timer); this.active = null;
+        if (exceeded || timedOut) return reject(new Error(exceeded ? 'Ответ Codex превысил допустимый объём.' : 'Истекло время выполнения этапа Codex.'));
         if (code !== 0) return reject(new Error(/limit|quota|usage/i.test(errorText + output) ? 'Лимит Codex. Результаты сохранены; повторите после восстановления лимита.' : 'Codex не завершил этап. Проверьте подключение и повторите; первичный результат сохранён, если был получен.'));
         try {
           const events = output.split('\n').filter(Boolean).map(x => JSON.parse(x));
           if (events.some(e => e.type === 'turn.failed' || e.type === 'error')) throw new Error('Codex сообщил об ошибке этапа.');
           const messages = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message');
-          const result = validateResult(JSON.parse(messages.at(-1)?.item.text || '{}'), snapshot, stage);
+          const result = resultSources(validateResult(JSON.parse(messages.at(-1)?.item.text || '{}'), snapshot, stage),snapshot,context.temporary?null:analysis);
           const session = events.find(e => e.type === 'thread.started')?.thread_id ?? null;
           const usage = events.find(e => e.type === 'turn.completed')?.usage ?? null;
           resolve({ ...result, execution: { session, usage, stage, completed: now() } });
         } catch (e) { reject(e); }
       });
     });
+    } finally {
+      if (isolatedHome) {
+        // Keep only refreshed credentials. Never copy logs, prompts or session state.
+        // Synchronous compare-and-replace cannot race an application logout.
+        if (!this.closing && epoch === this.authEpoch && !this.authOperation && originalAuth) {
+          let temp;
+          try {
+            const shared = join(this.home(), 'auth.json');
+            const fresh = readFileSync(join(isolatedHome, 'auth.json'), 'utf8');
+            const parsed = JSON.parse(fresh);
+            if (fresh !== originalAuth && fresh.length < 65536 && parsed.auth_mode === 'chatgpt' && parsed.tokens?.access_token && readFileSync(shared,'utf8') === originalAuth) {
+              temp = join(this.home(), `auth-refresh-${randomUUID()}.json`);
+              writeFileSync(temp, fresh, { mode: 0o600, flag: 'wx' }); renameSync(temp, shared); temp = null;
+            }
+          } catch { /* A failed refresh must never restore revoked credentials. */ }
+          finally { if (temp) { try { unlinkSync(temp); } catch {} } }
+        }
+        await rm(cwd, { recursive: true, force: true });
+      }
+    }
   }
   async tick() {
-    if (this.busy) return; this.busy = true;
+    if (this.busy || this.closing) return; this.busy = true;
     try {
       const job = this.db.prepare("SELECT * FROM analyses WHERE status='queued' ORDER BY created LIMIT 1").get();
+      const temporary = this.temporary?.next();
+      if (temporary && (!job || temporary.queuedAt < job.created)) { await this.temporary.run(temporary); return; }
       if (!job) return;
       const snapshot = JSON.parse(job.snapshot); let primary = job.primary_result && JSON.parse(job.primary_result);
-      const stillActive = () => ['queued','primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(job.id)?.status);
+      const stillActive = () => !this.closing && ['queued','primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(job.id)?.status);
       try {
         if (!primary) {
           this.db.prepare("UPDATE analyses SET status='primary',updated=? WHERE id=?").run(now(), job.id);
@@ -129,6 +168,11 @@ export class CodexRunner {
     } finally { this.busy = false; }
   }
   cancel(user, analysis) {
-    if (this.active?.user === user && this.active.analysis === analysis) this.active.child.kill('SIGTERM');
+    if (this.active?.user === user && this.active.analysis === analysis) return stopChild(this.active.child);
+    return Promise.resolve();
+  }
+  async stop() {
+    this.closing = true;
+    await Promise.all([stopChild(this.active?.child), stopChild(this.loginState?.child)]);
   }
 }

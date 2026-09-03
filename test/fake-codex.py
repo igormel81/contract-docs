@@ -24,6 +24,17 @@ assert json.loads((authdir / 'auth.json').read_text())['tokens']['access_token']
 prompt = sys.stdin.read()
 payload = prompt.split('ДАННЫЕ КОМПЛЕКТА:\n', 1)[1].split('\nРЕЗУЛЬТАТ АНАЛИТИКА', 1)[0].strip()
 snapshot = json.loads(payload)
+if snapshot.get('temporary'):
+    assert '--ephemeral' in sys.argv
+    assert 'history.persistence="none"' in sys.argv
+    assert os.environ['TMPDIR'] == str(authdir.parent)
+    assert os.environ['RUST_LOG'] == 'off'
+    # Simulate local runtime data; the test verifies it is deleted after a stage.
+    (authdir / 'test-session.jsonl').write_text(payload)
+    if 'REFRESH_AUTH' in payload:
+        credential = json.loads((authdir / 'auth.json').read_text())
+        credential['last_refresh'] = 'test-refresh-marker'
+        (authdir / 'auth.json').write_text(json.dumps(credential))
 review = 'ЭТАП 2, НЕЗАВИСИМЫЙ РЕВЬЮЕР.' in prompt
 if not review and 'SLOW_PRIMARY' in payload:
     (authdir / 'primary-started').touch()
@@ -36,6 +47,7 @@ block = document['blocks'][0]
 passport = [{'key':key,'title':key,'value':'Не найдено','status':'missing','sources':[]} for key in fields]
 passport[0].update(value=block['text'], status='extracted', sources=[{'fileId':document['id'],'blockId':block['id'],'quote':block['text']}])
 output = {'summary':'Только тестовая сводка', 'passport':passport, 'findings':[], 'coverage':[{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules']], 'limitations':['Тестовая модель, не настоящий анализ'], 'changes':['Проверен тестовый результат'] if review else []}
+output['findings'] = [{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'proposal':'Уточнить порядок согласования места выполнения работ.','review':'confirmed' if review else 'primary'}]
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(output)}}))
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))

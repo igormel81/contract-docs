@@ -52,7 +52,7 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.stage,'Подготовка');
   async function upload(bytes,name='contract.DOCX',session=a.cookie){const response=await fetch(base+'/contracts/'+c+'/files',{method:'POST',headers:{Origin:origin,'X-Docs-Request':'1','X-File-Name':encodeURIComponent(name),Cookie:session},body:bytes});return {status:response.status,data:await response.json()};}
   assert.equal((await upload(Buffer.from('fake'),'bad.pdf')).status,415);
-  const initialDoc=docx();const first=await upload(initialDoc);assert.equal(first.status,201);assert.equal(first.data.file.status,'ready');const file=first.data.file.id;
+  const initialDoc=docx('6.2. Место выполнения работ: Москва.');const first=await upload(initialDoc);assert.equal(first.status,201);assert.equal(first.data.file.status,'ready');const file=first.data.file.id;
   const duplicate=await upload(initialDoc,'другое имя.docx');assert.equal(duplicate.data.duplicate,true);assert.equal(duplicate.data.file.id,file);
   const otherDoc=docx('Другое содержание: сопровождение.');const concurrent=await Promise.all([upload(otherDoc,'one.docx'),upload(otherDoc,'two.docx')]);assert.equal(concurrent.filter(x=>x.data.duplicate).length,1);
   const rev=await request('/contracts/'+c+'/revisions',{file_ids:[file],note:'Исходная'},a.cookie);assert.equal(rev.status,201);
@@ -69,7 +69,21 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   const job=await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie);assert.equal(job.status,202);
   await app.runner.tick();let checked=await request('/contracts/'+c,undefined,a.cookie);const run=checked.data.analyses[0];
   assert.equal(run.status,'complete');assert.ok(run.primary_result&&run.review_result);assert.notEqual(run.primary_result.execution.session,run.review_result.execution.session);
+  const linkedRisk=await request('/contracts/'+c+'/risks',{title:'Риск с источником',severity:'medium',owner:'Игорь',detail:'Проверка неизменяемой ссылки.',origin:run.id+':test-finding'},a.cookie);assert.equal(linkedRisk.status,201);
+  let linked=(await request('/contracts/'+c,undefined,a.cookie)).data.risks.find(r=>r.id===linkedRisk.data.id);
+  assert.equal(linked.sources[0].revisionId,rev.data.id);assert.equal(linked.sources[0].fileId,file);assert.ok(linked.sources[0].block.text);
+  assert.equal(linked.sources[0].location,'п. 6.2');
+  const frozen=JSON.stringify(linked.sources);
+  assert.equal((await request('/files/'+file+'/structure',{},b.cookie)).status,404);
+  assert.equal((await request('/files/'+file+'/structure',{},a.cookie)).status,200);
+  assert.equal(JSON.stringify((await request('/contracts/'+c,undefined,a.cookie)).data.risks.find(r=>r.id===linkedRisk.data.id).sources),frozen);
+  assert.equal((await request('/analyses/'+run.id+'/documents',undefined,b.cookie)).status,404);
+  assert.equal((await request('/analyses/'+run.id+'/documents',undefined,a.cookie)).data[0].id,file);
+  const manualRisk=await request('/contracts/'+c+'/risks',{title:'Ручная ссылка',severity:'medium',owner:'Игорь',detail:'Пункт выбран вручную.',source:{fileId:file,blockId:linked.sources[0].blockId,revisionId:rev.data.id}},a.cookie);assert.equal(manualRisk.status,201);
+  assert.equal((await request('/contracts/'+c+'/risks',{title:'Подмена',severity:'medium',owner:'Игорь',detail:'Проверка',source:{fileId:file,blockId:'invented',revisionId:rev.data.id}},a.cookie)).status,400);
   const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:'custis',kind:'template'},b.cookie);assert.equal(contractB.status,201);
+  const wrongContract=await request('/contracts',{title:'Другой договор',contractor:'custis',customer_id:customer.data.id},a.cookie);
+  assert.equal((await request('/contracts/'+wrongContract.data.id+'/risks',{title:'Чужой пункт',severity:'medium',owner:'Игорь',detail:'Проверка',origin:run.id+':test-finding'},a.cookie)).status,400);
   const uploadB=await fetch(base+'/contracts/'+contractB.data.id+'/files',{method:'POST',headers:{Origin:origin,'X-Docs-Request':'1','X-File-Name':'second.docx',Cookie:b.cookie},body:docx('Второй пользователь: сопровождение системы.')});assert.equal(uploadB.status,201);
   const fileB=await uploadB.json();const revB=await request('/contracts/'+contractB.data.id+'/revisions',{file_ids:[fileB.file.id]},b.cookie);
   assert.equal((await request('/contracts/'+contractB.data.id+'/analyses',{revision_id:revB.data.id},b.cookie)).status,202);

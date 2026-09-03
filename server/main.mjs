@@ -1,5 +1,6 @@
 import http from 'node:http';
-import { readFile, writeFile, mkdir, statfs, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, statfs, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
@@ -8,6 +9,8 @@ import { HttpError, required, choice, hash, token, passwordHash, passwordMatches
 import { format, extract, similarity } from './documents.mjs';
 import { profiles, rules, instructionVersion } from './rules.mjs';
 import { CodexRunner } from './codex.mjs';
+import { QuickChecks } from './quick-checks.mjs';
+import { sourceRecord, resultSources } from './sources.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
@@ -24,9 +27,13 @@ export async function createApp(options = {}) {
     if (!canManageCodex(user)) throw new HttpError(403, 'Общим подключением Codex управляет владелец приложения.');
   }
   const runner = new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
+  const runtime = options.runtime || process.env.DOCS_RUNTIME || await mkdtemp(join(tmpdir(),'contract-docs-runtime-'));
+  const quick = new QuickChecks(runner,runtime,sandbox,options.quick); await quick.init();
   const dummyHash = await passwordHash(token());
   const timer = options.autoTick === false ? null : setInterval(() => runner.tick().catch(() => {}), 2000); timer?.unref();
+  const cleanupTimer=setInterval(()=>quick.sweep().catch(()=>console.error('temporary cleanup failed')),30000);cleanupTimer.unref();
   let uploading = 0;
+  quick.persistedUploads=()=>uploading;
   function send(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
   function cookie(res, value, maxAge = 43200) { res.setHeader('Set-Cookie', `docs_session=${value}; Path=/docs; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`); }
   function owned(table, rowId, user) {
@@ -40,7 +47,24 @@ export async function createApp(options = {}) {
     if (!row) throw new HttpError(404, 'Редакция не найдена.'); return row;
   }
   const fileView = f => ({ ...f, extraction: parse(f.extraction) });
-  const analysisView = a => ({ ...a, snapshot: undefined, primary_result: parse(a.primary_result), review_result: parse(a.review_result) });
+  const analysisView = a => ({ ...a, snapshot: undefined, primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
+  function originSources(origin,contract,user){
+    const split=origin.indexOf(':');if(split<1)throw new HttpError(400,'Некорректная ссылка на замечание.');
+    const run=owned('analyses',origin.slice(0,split),user);if(run.contract_id!==contract)throw new HttpError(400,'Замечание относится к другому договору.');
+    const finding=parse(run.review_result||run.primary_result)?.findings.find(f=>f.id===origin.slice(split+1));
+    if(!finding)throw new HttpError(400,'Исходное замечание не найдено.');
+    const snapshot=parse(run.snapshot);
+    return finding.sources.map(s=>{
+      const ref=sourceRecord(s,snapshot.documents,{analysisId:run.id,revisionId:run.revision_id,revisionNumber:snapshot.version});
+      if(!ref)throw new HttpError(400,'Цитата не подтверждена исходником.');
+      return {...ref,block:snapshot.documents.find(f=>f.id===s.fileId).blocks.find(b=>b.id===s.blockId)};
+    });
+  }
+  function riskSources(risk,user){
+    const saved=db.prepare('SELECT reference FROM risk_sources WHERE risk_id=? ORDER BY position').all(risk.id).map(r=>parse(r.reference));
+    if(saved.length||!risk.origin)return saved;
+    try{return originSources(risk.origin,risk.contract_id,user);}catch{return [];}
+  }
   function session(req) {
     const value = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith('docs_session='))?.slice(13);
     if (!value) return null;
@@ -53,8 +77,8 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.1' });
-    const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
+    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.2' });
+    const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));
       res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }); return res.end(content);
@@ -109,6 +133,32 @@ export async function createApp(options = {}) {
       if (input.confirm !== 'disconnect-application') throw new HttpError(400,'Подтвердите отключение Codex для всего приложения.');
       await runner.logout(); audit(db,user.id,null,'Общее подключение Codex отключено'); return send(res,200,{ok:true});
     }
+    if (path === '/docs/api/quick-checks') {
+      if (req.method === 'GET') return send(res,200,quick.list(user.id));
+      if (req.method === 'POST') {
+        limit(db,`quick-create:${user.id}`,20,3600000);
+        const input=await jsonBody(req);return send(res,201,quick.create(user.id,input.contractor));
+      }
+    }
+    const quickMatch=path.match(/^\/docs\/api\/quick-checks\/([\w-]+)(?:\/(files|analyze|discard|export))?(?:\/([\w-]+)\/(remove))?$/);
+    if (quickMatch) {
+      const packet=quick.own(quickMatch[1],user.id),action=quickMatch[2];
+      if (!action&&req.method==='GET')return send(res,200,quick.view(packet));
+      if(action==='files'&&req.method==='POST'){
+        if(quickMatch[4]){quick.removeFile(packet,quickMatch[3]);return send(res,200,quick.view(packet));}
+        const uploaded=await quick.upload(packet,req);return send(res,uploaded.duplicate?200:201,uploaded);
+      }
+      if(action==='analyze'&&req.method==='POST'){
+        limit(db,`analyses:${user.id}`,10,3600000);return send(res,202,await quick.start(packet));
+      }
+      if(action==='discard'&&req.method==='POST'){await quick.discard(packet);return send(res,200,{ok:true});}
+      if(action==='export'&&req.method==='GET'){
+        if(!packet.primary&&!packet.review)throw new HttpError(409,'Результат ещё не получен.');
+        res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="one-time-contract-review.json"'});
+        return res.end(JSON.stringify(quick.view(packet),null,2));
+      }
+      throw new HttpError(405,'Действие не поддерживается.');
+    }
     if (path === '/docs/api/customers' && req.method === 'POST') {
       const input = await jsonBody(req); const name = required(input.name,200); const inn = String(input.inn || '').trim();
       if (inn && !/^\d{10}(\d{2})?$/.test(inn)) throw new HttpError(400,'ИНН должен содержать 10 или 12 цифр.');
@@ -129,7 +179,7 @@ export async function createApp(options = {}) {
         revisions: db.prepare('SELECT * FROM revisions WHERE contract_id=? ORDER BY number DESC').all(contract.id).map(r=>({...r,file_ids:parse(r.file_ids)})),
         analyses: db.prepare('SELECT * FROM analyses WHERE contract_id=? ORDER BY created DESC').all(contract.id).map(analysisView),
         recommendations: db.prepare('SELECT r.* FROM recommendations r JOIN analyses a ON a.id=r.analysis_id WHERE a.contract_id=?').all(contract.id),
-        risks: db.prepare('SELECT * FROM risks WHERE contract_id=? ORDER BY created DESC').all(contract.id).map(r=>({...r,events:db.prepare('SELECT * FROM risk_events WHERE risk_id=? ORDER BY created DESC').all(r.id)})),
+        risks: db.prepare('SELECT * FROM risks WHERE contract_id=? ORDER BY created DESC').all(contract.id).map(r=>({...r,sources:riskSources(r,user.id),events:db.prepare('SELECT * FROM risk_events WHERE risk_id=? ORDER BY created DESC').all(r.id)})),
         history: db.prepare('SELECT action,detail,created FROM audit WHERE contract_id=? ORDER BY created DESC LIMIT 200').all(contract.id)
       });
       if (!action && req.method === 'PATCH') {
@@ -138,7 +188,7 @@ export async function createApp(options = {}) {
         tx(db,()=>{db.prepare('UPDATE contracts SET stage=? WHERE id=?').run(stage,contract.id);audit(db,user.id,contract.id,'Изменена стадия',`${stage}: ${reason}`);}); return send(res,200,{ok:true});
       }
       if (action === 'files' && req.method === 'POST') {
-        if (uploading >= 2) throw new HttpError(429,'Обрабатываются другие файлы. Повторите загрузку через минуту.');
+        if (uploading+quick.uploads >= 2) throw new HttpError(429,'Обрабатываются другие файлы. Повторите загрузку через минуту.');
         uploading++;
         try {
           let name; try { name = decodeURIComponent(String(req.headers['x-file-name'] || '')); } catch { throw new HttpError(400,'Некорректное имя файла.'); }
@@ -197,25 +247,40 @@ export async function createApp(options = {}) {
       if (action === 'risks' && req.method === 'POST') {
         if (contract.kind==='template') throw new HttpError(400,'Реестр рисков ведётся по реальному договору, не по шаблону.');
         const input=await jsonBody(req); const key=id();
-        db.prepare('INSERT INTO risks VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,contract.id,required(input.title,200),choice(input.severity,['high','medium','low']),'Открыт',required(input.owner,100),required(input.detail,5000),String(input.origin||'').slice(0,300),now(),now());
+        const origin=String(input.origin||'').slice(0,300);
+        let references=origin?originSources(origin,contract.id,user.id):[];
+        if(!origin&&input.source){
+          const {fileId,blockId,revisionId}=input.source,rev=revision(required(revisionId),contract.id);
+          if(!parse(rev.file_ids).includes(fileId))throw new HttpError(400,'Пункт не входит в выбранную редакцию.');
+          const file=owned('files',fileId,user.id),extraction=parse(file.extraction),block=extraction?.blocks.find(b=>b.id===blockId);
+          if(file.contract_id!==contract.id||!block)throw new HttpError(400,'Пункт не найден в договоре.');
+          const ref=sourceRecord({fileId,blockId,quote:block.text.slice(0,15000)},[{id:file.id,name:file.name,hash:file.hash,...extraction}],{analysisId:null,revisionId:rev.id,revisionNumber:rev.number});
+          if(!ref)throw new HttpError(400,'Для ссылки нужен читаемый пункт.');
+          references=[{...ref,block}];
+        }
+        tx(db,()=>{
+          db.prepare('INSERT INTO risks VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,contract.id,required(input.title,200),choice(input.severity,['high','medium','low']),'Открыт',required(input.owner,100),required(input.detail,5000),origin,now(),now());
+          references.forEach((reference,position)=>db.prepare('INSERT INTO risk_sources VALUES(?,?,?)').run(key,position,JSON.stringify(reference)));
+        });
         audit(db,user.id,contract.id,'Зарегистрирован риск',input.title); return send(res,201,{id:key});
       }
     }
-    match=path.match(/^\/docs\/api\/files\/([\w-]+)\/(download|retry)$/);
+    match=path.match(/^\/docs\/api\/files\/([\w-]+)\/(download|retry|structure)$/);
     if(match){
       const f=owned('files',match[1],user.id);
       if(match[2]==='download'&&req.method==='GET'){
         res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Disposition':`attachment; filename="document.${f.ext}"; filename*=UTF-8''${encodeURIComponent(f.name)}`}); return res.end(await readFile(join(dir,'files',f.id)));
       }
-      if(match[2]==='retry'&&req.method==='POST'){
-        if(f.status==='ready') throw new HttpError(409,'Файл уже прочитан.');
-        if(uploading>=2) throw new HttpError(429,'Обработка занята. Повторите позже.'); uploading++;
-        try{const result=await extract(join(dir,'files',f.id),f.ext,sandbox); db.prepare('UPDATE files SET status=?,extraction=? WHERE id=?').run(result.status,JSON.stringify(result.extraction),f.id); return send(res,200,result);} finally{uploading--;}
+      if(['retry','structure'].includes(match[2])&&req.method==='POST'){
+        if(f.status==='ready'&&match[2]==='retry') throw new HttpError(409,'Файл уже прочитан.');
+        if(uploading+quick.uploads>=2) throw new HttpError(429,'Обработка занята. Повторите позже.'); uploading++;
+        try{const result=await extract(join(dir,'files',f.id),f.ext,sandbox);if(match[2]==='structure'&&result.status!=='ready')throw new HttpError(422,'Не удалось обновить структуру. Прежний текст и анализы сохранены.');db.prepare('UPDATE files SET status=?,extraction=? WHERE id=?').run(result.status,JSON.stringify(result.extraction),f.id); return send(res,200,result);} finally{uploading--;}
       }
     }
-    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export)$/);
+    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export|documents)$/);
     if(match){
       const analysis=owned('analyses',match[1],user.id); const action=match[2];
+      if(action==='documents'&&req.method==='GET')return send(res,200,parse(analysis.snapshot).documents);
       if(action==='export'&&req.method==='GET'){
         const edited=db.prepare('SELECT * FROM recommendations WHERE analysis_id=?').all(analysis.id);
         res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="contract-analysis.json"'}); return res.end(JSON.stringify({...analysisView(analysis),recommendations:edited},null,2));
@@ -260,11 +325,14 @@ export async function createApp(options = {}) {
   }
   const server=http.createServer((req,res)=>route(req,res).catch(e=>{if(!res.headersSent)send(res,e.status||500,{error:e.status?e.message:'Не удалось выполнить действие. Повторите позже.'});else res.end();if(!e.status)console.error('request failed',e.code||e.name);}));
   server.requestTimeout=45000; server.headersTimeout=15000;
-  server.on('close',()=>{clearInterval(timer); if(runner.active)runner.active.child.kill('SIGTERM'); runner.loginState?.child.kill('SIGTERM');db.close();});
-  return {server,db,runner,dir};
+  let disposal;
+  function dispose(){return disposal??=(async()=>{clearInterval(timer);clearInterval(cleanupTimer);runner.closing=true;await Promise.all([quick.close(),runner.stop()]);db.close();})();}
+  server.on('close',()=>{void dispose().catch(()=>console.error('shutdown cleanup failed'));});
+  async function close(){await new Promise(resolve=>server.close(resolve));await dispose();}
+  return {server,db,runner,dir,quick,close};
 }
 if(process.argv[1] && realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
   const app=await createApp(); const port=Number(process.env.DOCS_PORT||3107);
   app.server.listen(port,'127.0.0.1',()=>console.log(`Contract workspace ready at http://127.0.0.1:${port}/docs/`));
-  process.on('SIGTERM',()=>app.server.close(()=>process.exit(0)));
+  process.on('SIGTERM',()=>{void app.close().then(()=>process.exit(0));});
 }

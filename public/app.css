@@ -4,3 +4,19 @@
 @media(max-width:900px){#app{height:auto;min-height:100dvh}.workspace{grid-template-columns:1fr}.sidebar{padding:12px;display:grid;grid-template-columns:1fr 1fr;border-right:0}.catalog{grid-column:1/-1;display:flex;max-height:130px;gap:8px}.catalog button{min-width:170px;max-width:240px;margin:0}.sidebar-foot{display:none}.main{min-height:650px}.panels{min-height:480px}.context{align-items:center}.topbar{padding:12px;height:auto;flex-wrap:wrap}.content{max-height:650px}.footer{height:auto;min-height:28px}.center-empty{min-height:450px}}
 @media(max-width:620px){:root{font-size:16px}.login-page{grid-template-columns:1fr}.login-story{padding:28px;gap:18px}.login-story h1{font-size:36px;max-width:none}.login-story .steps{display:none}.login-box{padding:28px 20px}.login-box .form{width:100%;max-width:400px}.topbar .brand{font-size:15px}.panels{display:flex;flex-direction:column}.panel.inspector{border-left:0;border-top:1px solid var(--line)}.panel .content{max-height:65dvh}.facts{grid-template-columns:1fr 1fr}.passport-strip{padding:12px}.context h1{font-size:19px}.context .row{width:100%}.context select{flex:1}.comparison{grid-template-columns:1fr}input,select,textarea{font-size:16px}button{min-height:44px}.compact-action{min-height:36px}.sidebar{gap:8px}.tabs button{font-size:13px;min-height:44px}.footer{padding:8px 14px}.login-story .brand{font-size:14px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+.main:not(.quick-main){grid-template-rows:auto minmax(0,1fr)}
+.passport-compact{margin:12px 0 0}
+.error:empty{display:none}
+.passport-row{display:grid;grid-template-columns:135px minmax(0,1fr);gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}
+.passport-row dt{font-size:13px;font-weight:600;color:var(--muted)}
+.passport-row dd{margin:0;min-width:0;font-size:14px;line-height:1.45}
+.passport-row dd p{white-space:pre-wrap}
+.passport-evidence{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-top:3px}
+.passport-evidence small{font-size:11px}
+.source-link{max-width:100%;text-align:start;overflow-wrap:anywhere;font-size:12px;color:var(--accent)}
+.passport-evidence .source-link{min-height:28px;padding:2px 5px;border-color:transparent;background:transparent}
+.contract-text .source-block{border:0;padding:0;margin-block:12px;line-height:1.65}
+.contract-text .source-block.highlight{padding:10px;background:var(--warn-bg)}
+.contract-text .clause-heading{font-weight:650;margin-top:22px}
+.contract-text mark{background:#ead9a8;color:var(--ink)}
+@media(max-width:620px){.passport-row{grid-template-columns:1fr;gap:4px;padding:10px 0}.passport-evidence .source-link{min-height:36px}}
