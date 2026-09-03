@@ -57,11 +57,9 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await app.runner.tick();await page.waitForSelector('[data-action=quick-export]');await page.waitForFunction(()=>document.querySelector('[role=status]').textContent==='Ревью завершено');
   await page.click('[data-action=quick-tab][data-value=passport]');await page.waitForSelector('[data-action=quick-source]');await page.click('[data-action=quick-source]');await page.waitForSelector('.source-block.highlight');
   assert.match(await page.$eval('.source-block.highlight',el=>el.textContent),/Москва/);
-  await page.click('[data-action=quick-layout]');
+  await page.click('[data-action=quick-tab][data-value=analysis]');
   await page.waitForSelector('section.panel .analysis-result');
-  assert.equal(await page.$$eval('.analysis-result',els=>els.length),1);
-  assert.equal(await page.$eval('[data-action=quick-layout]',el=>el.textContent),'В боковую панель');
-  assert.equal(await page.evaluate(()=>document.activeElement?.dataset.action),'quick-layout');
+  assert.equal(await page.$$eval('.analysis-result',els=>els.length),1,'The analysis lives in one place, not two');
   await page.click('section.panel [data-action=quick-source]');
   await page.waitForSelector('aside .source-block.highlight');
   assert.ok(await page.$('section.panel .analysis-result'));
@@ -73,9 +71,9 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
     await page.screenshot({path:join(screenshotDir,`center-quick-${width}.png`),fullPage:true});
   }
   await page.setViewport({width:1440,height:900});
-  await page.click('[data-action=quick-layout]');
+  await page.click('[data-action=quick-tab][data-value=source]');
   await page.waitForSelector('aside .analysis-result');
-  assert.ok(await page.$('section.panel .source-block.highlight'));
+  assert.ok(await page.$('section.panel .source-block.highlight'),'The clause moves to the main area, the analysis stays beside it');
   await page.click('[data-action=quick-tab][data-value=analysis]');
   await page.waitForSelector('section.panel .analysis-result');
   await page.click('[data-action=quick-export]');
