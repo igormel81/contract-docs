@@ -39,6 +39,9 @@ export function assembleReview(primary, delta) {
   for (const item of delta.added) findings.push({ ...item, review: 'added' });
   return { summary: delta.summary, passport: delta.passport, findings, coverage: delta.coverage, limitations: delta.limitations, changes };
 }
+// A single clause in, a single wording out: generating fifteen drafts nobody opens
+// is the cheapest waste to remove.
+export const proposalSchema = obj({ proposal: string, note: string });
 export const legalLimitation = 'Правовая экспертиза не выполнялась: проверенная нормативная база не подключена, правовые выводы требуют юриста.';
 const ajv = new Ajv({ allErrors: true });
 const validate = ajv.compile(schema);

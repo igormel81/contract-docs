@@ -303,7 +303,7 @@ export async function createApp(options = {}) {
         try{const result=await extract(join(dir,'files',f.id),f.ext,sandbox);if(match[2]==='structure'&&result.status!=='ready')throw new HttpError(422,'Не удалось обновить структуру. Прежний текст и анализы сохранены.');db.prepare('UPDATE files SET status=?,extraction=? WHERE id=?').run(result.status,JSON.stringify(result.extraction),f.id); return send(res,200,result);} finally{uploading--;}
       }
     }
-    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export|documents|summary)$/);
+    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export|documents|summary|proposal)$/);
     if(match){
       const analysis=owned('analyses',match[1],user.id); const action=match[2];
       if(action==='documents'&&req.method==='GET')return send(res,200,parse(analysis.snapshot).documents);
@@ -334,6 +334,22 @@ export async function createApp(options = {}) {
       }
       if(req.method==='POST'&&action==='cancel'){
         db.prepare("UPDATE analyses SET status='cancelled',updated=? WHERE id=? AND status IN ('queued','primary','review')").run(now(),analysis.id); runner.cancel(user.id,analysis.id); return send(res,200,{ok:true});
+      }
+      if(req.method==='POST'&&action==='proposal'){
+        const input=await jsonBody(req); const stored=parse(analysis.review_result||analysis.primary_result);
+        const finding=stored?.findings.find(f=>f.id===input.finding_id);
+        if(!finding) throw new HttpError(404,'Замечание не найдено.');
+        limit(db,`proposal:${user.id}`,30,3600000);
+        const snapshot=parse(analysis.snapshot);
+        const clauses=finding.sources.map(s=>{
+          const document=snapshot.documents.find(d=>d.id===s.fileId), block=document?.blocks.find(b=>b.id===s.blockId);
+          return block?{document:document.name,clause:block.locator?.label||'без номера',text:block.text.slice(0,6000)}:null;
+        }).filter(Boolean);
+        const rule=snapshot.rules.find(r=>r.id===finding.rule);
+        const answer=await runner.proposal({profile:snapshot.profile,rule:rule&&{id:rule.id,title:rule.title,instruction:rule.instruction,avoid:rule.avoid},
+          finding:{rule:finding.rule,title:finding.title,description:finding.description,severity:finding.severity},clauses});
+        audit(db,user.id,analysis.contract_id,'Запрошена формулировка правки',`${finding.rule}: ${finding.title}`);
+        return send(res,200,{proposal:answer.proposal,note:answer.note});
       }
       if(req.method==='POST'&&action==='recommendation'){
         const input=await jsonBody(req); const result=parse(analysis.review_result||analysis.primary_result);

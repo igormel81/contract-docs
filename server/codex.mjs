@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile, unlink, rm } from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { schema, reviewSchema, validateResult, parseReview } from './schema.mjs';
-import { sharedInstruction, analystInstruction, reviewerInstruction } from './rules.mjs';
+import { schema, reviewSchema, proposalSchema, validateResult, parseReview } from './schema.mjs';
+import { sharedInstruction, analystInstruction, reviewerInstruction, proposalInstruction } from './rules.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
 import { resultSources, leanResult } from './sources.mjs';
@@ -148,6 +148,41 @@ export class CodexRunner {
         await rm(cwd, { recursive: true, force: true });
       }
     }
+  }
+  // One clause, one wording, on request. Kept out of the analysis queue: it is short,
+  // it belongs to a person waiting at the screen, and it must never displace a run.
+  async proposal(request) {
+    if (!(await this.status()).connected) throw new HttpError(409, 'Общий Codex не подключён.');
+    if (this.busy || this.active) throw new HttpError(409, 'Сейчас выполняется анализ. Повторите, когда очередь освободится.');
+    const cwd = join(this.dir, 'jobs', 'proposal-' + randomUUID());
+    try {
+      await mkdir(cwd, { recursive: true, mode: 0o700 });
+      const schemaPath = join(cwd, 'schema.json');
+      await writeFile(schemaPath, JSON.stringify(proposalSchema), { mode: 0o600 });
+      const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c','web_search="disabled"'];
+      for (const feature of disabled) args.push('--disable', feature);
+      args.push('-');
+      return await new Promise((resolve, reject) => {
+        const child = spawn(this.binary, args, { cwd, env: this.env(), stdio: ['pipe','pipe','pipe'] });
+        let output = '', errorText = '', exceeded = false;
+        const timer = setTimeout(() => void stopChild(child), 3 * 60000); timer.unref();
+        child.stdout.on('data', chunk => { if (exceeded) return; output += chunk; if (output.length > 512 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
+        child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-4000); });
+        child.stdin.on('error', () => {}); child.stdin.end(`${proposalInstruction}\nДАННЫЕ:\n${JSON.stringify(request)}`);
+        child.on('error', () => { clearTimeout(timer); reject(new HttpError(503, 'Исполнитель Codex недоступен.')); });
+        child.on('close', code => {
+          clearTimeout(timer);
+          if (exceeded || code !== 0) return reject(new HttpError(503, /limit|quota|usage/i.test(errorText + output) ? 'Лимит Codex. Повторите позже.' : 'Не удалось получить формулировку. Повторите позже.'));
+          try {
+            const events = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
+            const message = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message').at(-1);
+            const answer = JSON.parse(message?.item.text || '{}');
+            if (typeof answer.proposal !== 'string' || !answer.proposal.trim()) throw new Error('empty');
+            resolve({ proposal: answer.proposal.slice(0, 15000), note: String(answer.note || '').slice(0, 2000), usage: events.find(e => e.type === 'turn.completed')?.usage ?? null });
+          } catch { reject(new HttpError(503, 'Ответ исполнителя не удалось разобрать. Повторите позже.')); }
+        });
+      });
+    } finally { await rm(cwd, { recursive: true, force: true }); }
   }
   async tick() {
     if (this.busy || this.closing) return; this.busy = true;

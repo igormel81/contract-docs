@@ -91,6 +91,13 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed[0].key,candidate);
   assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,restore:true},a.cookie)).status,200);
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed.length,0,'Dismissal is reversible');
+  assert.equal((await request('/analyses/'+run.id+'/proposal',{finding_id:'нет такого'},a.cookie)).status,404);
+  assert.equal((await request('/analyses/'+run.id+'/proposal',{finding_id:'test-finding'},b.cookie)).status,404,'Wording follows contract access');
+  const drafted=await request('/analyses/'+run.id+'/proposal',{finding_id:'test-finding'},a.cookie);
+  assert.equal(drafted.status,200);
+  assert.match(drafted.data.proposal,/\[/,'Unknown parameters stay in brackets');
+  assert.equal(run.review_result.findings[0].proposal,'Уточнить порядок согласования места выполнения работ.','The analyst wording is kept when it exists');
+  assert.ok((await request('/contracts/'+c,undefined,a.cookie)).data.history.some(e=>e.action==='Запрошена формулировка правки'));
   async function summary(analysisId,session,query=''){const response=await fetch(`${base}/analyses/${analysisId}/summary${query}`,{headers:{Origin:origin,Cookie:session}});return {status:response.status,text:await response.text()};}
   assert.equal((await summary(run.id,b.cookie)).status,404,'A summary follows contract access');
   assert.equal((await request('/contracts/'+c,{manager:'Мария, менеджер'},a.cookie,'PATCH')).status,200);

@@ -22,6 +22,16 @@ if sys.argv[1] == 'login':
 assert json.loads((authdir / 'auth.json').read_text())['tokens']['access_token'] == 'fake-test-only'
 
 prompt = sys.stdin.read()
+if 'ДАННЫЕ КОМПЛЕКТА:' not in prompt:
+    # Wording for a single clause, requested from the interface.
+    request = json.loads(prompt.split('ДАННЫЕ:\n', 1)[1])
+    assert request['clauses'], 'Formulation requires the clause text'
+    answer = {'proposal': 'Стороны согласовывают перечень площадок [перечень] и оплату выездов [параметр].',
+              'note': 'Тестовая формулировка по правилу ' + request['finding']['rule']}
+    print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(answer)}}))
+    print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))
+    sys.exit(0)
 payload = prompt.split('ДАННЫЕ КОМПЛЕКТА:\n', 1)[1].split('\nРЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА', 1)[0].strip()
 snapshot = json.loads(payload)
 snapshot.update(json.loads(prompt.split('ПРАВИЛА И ПРОФИЛЬ:\n', 1)[1].split('\nЭТАП', 1)[0].strip()))
