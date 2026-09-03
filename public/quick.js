@@ -16,7 +16,7 @@ export function textReport(packet, profileName) {
 
 export class QuickUI {
   constructor(deps){Object.assign(this,deps);this.reset();}
-  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.source=null;this.profile='custis';this.error='';this.batch=false;}
+  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.returnTab='files';this.source=null;this.profile='custis';this.error='';this.batch=false;}
   async open(){this.error='';const generation=this.generation,list=await this.api('/quick-checks');if(generation!==this.generation)return;this.packet=list[0]||null;if(this.packet)this.profile=this.packet.contractor;}
   async refresh(){
     if(!this.packet)return;
@@ -29,24 +29,25 @@ export class QuickUI {
     const {esc,btn}=this,p=this.packet,editable=!p||p.status==='draft';
     return `<div class="flow"><h2>Договор и приложения</h2><label>Подрядчик<select id="quick-contractor" ${p?'disabled':''}>${Object.entries(this.getBoot().profiles).map(([key,value])=>`<option value="${key}" ${key===this.profile?'selected':''}>${esc(value.name)}</option>`).join('')}</select></label>${editable?`<div class="dropzone" id="quick-dropzone"><strong>Перетащите пакет документов</strong><p>PDF, DOC, DOCX · можно несколько сразу</p>${btn('Выбрать файлы','quick-pick','','primary',this.batch)}<small>До 20 МБ на файл, 20 файлов и 100 МБ на пакет. Точные дубли исключаются.</small><input class="hidden" type="file" id="quick-file-picker" accept=".pdf,.doc,.docx" multiple></div>`:'<p class="muted">Состав зафиксирован для этой проверки. Для другого пакета начните новую разовую проверку.</p>'}${this.rows.filter(r=>r.status!=='done').map((row)=>`<div class="file-row"><span></span><div><strong>${esc(row.name)}</strong><p class="${row.status==='error'?'error':'muted'}">${esc(row.message)}</p>${row.status==='uploading'?`<progress aria-label="Загрузка ${esc(row.name)}" value="${row.progress||0}" max="100"></progress>`:''}</div>${row.status==='error'?btn('Убрать ошибку','quick-dismiss',row.id,'quiet'):''}</div>`).join('')}${p?.files.map(f=>`<div class="file-row"><span class="file-type">${esc(f.ext.toUpperCase())}</span><div><strong>${esc(f.name)}</strong><p><small>${f.status==='ready'?'Текст извлечён; оригинал удалён':'Не удалось прочитать'}</small></p>${f.extraction.warnings.map(w=>`<p class="${f.status==='error'?'error':'warning'}">${esc(w)}</p>`).join('')}${btn('Показать текст','quick-file',f.id,'quiet',f.status!=='ready')}</div>${editable?btn('Убрать','quick-remove',f.id,'quiet',this.batch):''}</div>`).join('')||''}${!this.getBoot().codex.connected?'<p class="warning">Общий Codex не подключён. Владелец приложения должен выполнить вход в настройках.</p>':''}</div>`;
   }
-  leftView(){
+  leftView(tab=this.tab){
     const p=this.packet,result=p?.review_result||p?.primary_result,{esc}=this;
-    if(this.tab==='passport')return result?`<div class="flow"><h2>Паспорт договора</h2>${compactPassport(result,esc,sources=>this.refs(sources))}</div>`:'<div class="empty"><h2>Паспорт появится после анализа</h2><p>Предмет, сроки, оплата, места выполнения работ и другие условия.</p></div>';
-    if(this.tab==='source'){
+    if(tab==='passport')return result?`<div class="flow"><h2>Паспорт договора</h2>${compactPassport(result,esc,sources=>this.refs(sources))}</div>`:'<div class="empty"><h2>Паспорт появится после анализа</h2><p>Предмет, сроки, оплата, места выполнения работ и другие условия.</p></div>';
+    if(tab==='source'){
       const file=p?.files.find(f=>f.id===this.source?.fileId);
       return file?`<div class="document"><h2>${esc(file.name)}</h2><p class="muted">Извлечённый текст. Оригинал удалён с сервера.</p>${documentText(file,this.source,esc,'quick-block-')}</div>`:'<div class="empty"><p>Откройте текст файла или источник замечания.</p></div>';
     }
     return this.filesView();
   }
+  layoutButton(){return this.btn(this.tab==='analysis'?'В боковую панель':'В центр','quick-layout','','compact-action');}
   rightView(){
     const {esc,btn}=this,p=this.packet,result=p?.review_result||p?.primary_result;
     const statuses={draft:'Готов к загрузке',queued:'В общей очереди',primary:'Первичный анализ',review:'Независимое ревью',complete:'Ревью завершено',error:'Ошибка этапа',cancelled:'Проверка отменена'};
-    if(!p||p.status==='draft')return '<div class="empty"><h2>Одна проверка, без архива</h2><p>Загрузите договор с приложениями. Аналитик сформирует паспорт и замечания, ревьюер проверит выводы и предложенные правки по исходникам.</p><p>Заказчик, карточка договора и редакции не создаются.</p></div>';
-    return `<div class="flow"><h2 role="status">${esc(statuses[p.status])}</h2><div class="step-line"><div class="step ${p.primary_result?'done':p.status==='primary'?'running':''}">Аналитик<br>${p.primary_result?'Результат получен':'Ожидается'}</div><div class="step ${p.review_result?'done':p.status==='review'?'running':''}">Ревьюер<br>${p.review_result?'Проверено':'Не завершено'}</div></div>${p.error?`<p class="error" role="alert">${esc(p.error)}</p>`:''}${p.status==='error'?btn(p.primary_result?'Повторить ревью':'Повторить анализ','quick-run','','primary',!this.getBoot().codex.connected):''}${result?`${!p.review_result?'<p class="warning">Это первичный результат. Ревью ещё не завершено.</p>':''}<p>${esc(result.summary)}</p>${btn(p.review_result?'Скачать отчёт (.txt)':'Скачать первичный отчёт','quick-export','','primary')}<div class="finding">${btn('Открыть паспорт','quick-tab','passport','quiet')}</div>${result.findings.map(f=>`<article class="finding"><small>${esc(f.rule)} · ${esc({high:'Высокий риск',medium:'Средний риск',low:'Низкий риск'}[f.severity])}</small><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p><h3>Предлагаемая формулировка</h3><p class="source-block">${esc(f.proposal)}</p><div>${this.refs(f.sources)}</div></article>`).join('')||'<p>Замечания не сформированы. Это не подтверждение отсутствия рисков.</p>'}<h3>Ограничения</h3>${result.limitations.map(l=>`<p class="muted">${esc(l)}</p>`).join('')}<details><summary>Покрытие правил</summary>${result.coverage.map(c=>`<p>${esc(c.rule)}: ${esc({checked:'Проверено',not_applicable:'Не применимо',needs_data:'Нужны данные'}[c.status])}. ${esc(c.note)}</p>`).join('')}</details>`:'<p class="muted">Можно оставить эту страницу открытой. Результат появится автоматически, после обновления страницы текущую проверку можно продолжить.</p>'}</div>`;
+    if(!p||p.status==='draft')return `<div class="flow analysis-result">${this.layoutButton()}<div class="empty"><h2>Одна проверка, без архива</h2><p>Загрузите договор с приложениями. Аналитик сформирует паспорт и замечания, ревьюер проверит выводы и предложенные правки по исходникам.</p><p>Заказчик, карточка договора и редакции не создаются.</p></div></div>`;
+    return `<div class="flow analysis-result" data-result-key="${esc(p.id)}"><div class="row between"><h2>Анализ и рекомендации</h2>${this.layoutButton()}</div><h2 role="status">${esc(statuses[p.status])}</h2><div class="step-line"><div class="step ${p.primary_result?'done':p.status==='primary'?'running':''}">Аналитик<br>${p.primary_result?'Результат получен':'Ожидается'}</div><div class="step ${p.review_result?'done':p.status==='review'?'running':''}">Ревьюер<br>${p.review_result?'Проверено':'Не завершено'}</div></div>${p.error?`<p class="error" role="alert">${esc(p.error)}</p>`:''}${p.status==='error'?btn(p.primary_result?'Повторить ревью':'Повторить анализ','quick-run','','primary',!this.getBoot().codex.connected):''}${result?`${!p.review_result?'<p class="warning">Это первичный результат. Ревью ещё не завершено.</p>':''}<p>${esc(result.summary)}</p>${btn(p.review_result?'Скачать отчёт (.txt)':'Скачать первичный отчёт','quick-export','','primary')}<div class="finding">${btn('Открыть паспорт','quick-tab','passport','quiet')}</div>${result.findings.map(f=>`<article class="finding"><small>${esc(f.rule)} · ${esc({high:'Высокий риск',medium:'Средний риск',low:'Низкий риск'}[f.severity])}</small><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p><h3>Предлагаемая формулировка</h3><p class="source-block">${esc(f.proposal)}</p><div>${this.refs(f.sources)}</div></article>`).join('')||'<p>Замечания не сформированы. Это не подтверждение отсутствия рисков.</p>'}<h3>Ограничения</h3>${result.limitations.map(l=>`<p class="muted">${esc(l)}</p>`).join('')}<details><summary>Покрытие правил</summary>${result.coverage.map(c=>`<p>${esc(c.rule)}: ${esc({checked:'Проверено',not_applicable:'Не применимо',needs_data:'Нужны данные'}[c.status])}. ${esc(c.note)}</p>`).join('')}</details>`:'<p class="muted">Можно оставить эту страницу открытой. Результат появится автоматически, после обновления страницы текущую проверку можно продолжить.</p>'}</div>`;
   }
   view(){
     const {btn,esc}=this,p=this.packet;
-    return `<header class="context"><div><h1>Разовая проверка</h1><p>Без добавления в хранилище</p></div><div class="row">${!p||p.status==='draft'?btn('Проверить пакет','quick-run','','primary',this.batch||!p?.files.length||p.files.some(f=>f.status!=='ready')||this.rows.some(r=>r.status==='error')||!this.getBoot().codex.connected):''}${p?btn('Удалить пакет','quick-discard','','danger'):''}</div></header><div class="passport-strip"><p>Оригиналы удаляются после чтения. Текст и результат доступны ${p?'до '+esc(this.date(p.expires)):'не дольше часа'}, затем удаляются автоматически. Перезапуск сервера завершает временную сессию.</p><small>Текст передаётся в Codex для анализа. Этот режим не меняет условия обработки данных OpenAI. Скачайте нужный отчёт до удаления.</small>${this.error?`<p class="error" role="alert">${esc(this.error)}</p>`:''}</div><div class="panels"><section class="panel"><nav class="tabs" aria-label="Разовая проверка">${[['files','Пакет'],['passport','Паспорт'],['source','Источники']].map(([key,title])=>btn(title,'quick-tab',key,this.tab===key?'active':'')).join('')}</nav><div class="content">${this.leftView()}</div></section><aside class="panel inspector"><div class="tabs row"><span>Анализ и рекомендации</span></div><div class="content">${this.rightView()}</div></aside></div>`;
+    return `<header class="context"><div><h1>Разовая проверка</h1><p>Без добавления в хранилище</p></div><div class="row">${!p||p.status==='draft'?btn('Проверить пакет','quick-run','','primary',this.batch||!p?.files.length||p.files.some(f=>f.status!=='ready')||this.rows.some(r=>r.status==='error')||!this.getBoot().codex.connected):''}${p?btn('Удалить пакет','quick-discard','','danger'):''}</div></header><div class="passport-strip"><p>Оригиналы удаляются после чтения. Текст и результат доступны ${p?'до '+esc(this.date(p.expires)):'не дольше часа'}, затем удаляются автоматически. Перезапуск сервера завершает временную сессию.</p><small>Текст передаётся в Codex для анализа. Этот режим не меняет условия обработки данных OpenAI. Скачайте нужный отчёт до удаления.</small>${this.error?`<p class="error" role="alert">${esc(this.error)}</p>`:''}</div><div class="panels"><section class="panel"><nav class="tabs" aria-label="Разовая проверка">${[['files','Пакет'],['passport','Паспорт'],['analysis','Анализ'],['source','Источники']].map(([key,title])=>btn(title,'quick-tab',key,this.tab===key?'active':'')).join('')}</nav><div class="content">${this.tab==='analysis'?this.rightView():this.leftView()}</div></section><aside class="panel inspector"><div class="tabs row"><span>${this.tab==='analysis'?'Источник замечания':'Анализ и рекомендации'}</span></div><div class="content">${this.tab==='analysis'?this.leftView('source'):this.rightView()}</div></aside></div>`;
   }
   async upload(files){
     if(this.batch){this.notice('Дождитесь завершения текущей загрузки.');return;}
@@ -81,10 +82,19 @@ export class QuickUI {
   async action(action,value,button){
     this.error='';const generation=this.generation;
     if(action==='quick-pick'){document.querySelector('#quick-file-picker')?.click();button.disabled=false;return;}
-    if(action==='quick-tab')this.tab=value;
+    if(action==='quick-tab'){if(value==='analysis'&&this.tab!=='analysis')this.returnTab=this.tab;this.tab=value;}
+    if(action==='quick-layout'){
+      const scrollTop=button.closest('.content')?.scrollTop||0;
+      if(this.tab==='analysis')this.tab=this.returnTab||'files';
+      else {this.returnTab=this.tab;this.tab='analysis';}
+      this.render();
+      const control=document.querySelector('[data-action="quick-layout"]');control?.focus({preventScroll:true});
+      if(control)control.closest('.content').scrollTop=scrollTop;
+      return;
+    }
     if(action==='quick-dismiss')this.rows=this.rows.filter(r=>r.id!==value);
     if(action==='quick-file'){this.source={fileId:value};this.tab='source';}
-    if(action==='quick-source'){this.source=JSON.parse(value);this.tab='source';}
+    if(action==='quick-source'){this.source=JSON.parse(value);if(this.tab!=='analysis')this.tab='source';}
     if(action==='quick-remove'){const packet=await this.api(`/quick-checks/${this.packet.id}/files/${value}/remove`,{});if(generation!==this.generation)return;this.packet=packet;}
     if(action==='quick-run'){const packet=await this.api(`/quick-checks/${this.packet.id}/analyze`,{});if(generation!==this.generation)return;this.packet=packet;this.notice('Пакет поставлен в общую очередь. В хранилище он не добавляется.');}
     if(action==='quick-discard'){
@@ -98,6 +108,6 @@ export class QuickUI {
       link.href=url;link.download='Проверка договора.txt';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     }
     this.render();
-    if(this.source?.blockId&&this.tab==='source')document.getElementById('quick-block-'+this.source.blockId)?.scrollIntoView({block:'nearest'});
+    if(this.source?.blockId&&['source','analysis'].includes(this.tab))document.getElementById('quick-block-'+this.source.blockId)?.scrollIntoView({block:'nearest'});
   }
 }
