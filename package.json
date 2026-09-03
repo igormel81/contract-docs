@@ -1,0 +1,13 @@
+{
+  "name": "contract-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server/main.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server/main.mjs && node --check server/codex.mjs && node --check public/app.js"
+  },
+  "dependencies": { "ajv": "8.20.0" }
+}

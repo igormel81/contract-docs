@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createApp } from '../server/main.mjs';
+import { format, similarity } from '../server/documents.mjs';
+import { validateResult } from '../server/schema.mjs';
+import { rules } from '../server/rules.mjs';
+import { fileURLToPath } from 'node:url';
+
+export function docx(text='Договор. Предмет: внедрение системы. Срок: 30 дней после аванса.') {
+  return execFileSync('python3',['-c',`import io,zipfile,sys,html
+b=io.BytesIO()
+with zipfile.ZipFile(b,'w',zipfile.ZIP_DEFLATED) as z:
+ z.writestr('[Content_Types].xml','<Types/>')
+ z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'+html.escape(sys.argv[1])+'</w:t></w:r></w:p></w:body></w:document>')
+sys.stdout.buffer.write(b.getvalue())`,text]);
+}
+test('formats and similarity never use name as content identity',()=>{
+  assert.equal(format('Contract.DOCX',docx()),'docx');
+  assert.throws(()=>format('fake.pdf',Buffer.from('not a pdf')));
+  assert.throws(()=>format('macro.docm',docx()));
+  assert.equal(similarity('Москва срок оплата','Москва срок оплата'),1);
+});
+test('grounded schema rejects fabricated citations',()=>{
+  const snapshot={documents:[{id:'file',blocks:[{id:'b1',text:'Предмет: внедрение системы.'}]}],rules};
+  const r={summary:'Внедрение системы',passport:['subject','result','term','price','payment','location','acceptance','dependencies','special'].map(key=>({key,title:key,value:'Не найдено',status:'missing',sources:[]})),findings:[],coverage:rules.map(r=>({rule:r.id,status:'needs_data',note:'Проверить'})),limitations:['Нет нормативной базы'],changes:[]};
+  assert.equal(validateResult(r,snapshot,'primary'),r);
+  r.passport[0]={key:'subject',title:'Предмет',value:'Внедрение',status:'extracted',sources:[{fileId:'file',blockId:'b1',quote:'Предмет: внедрение системы.'}]};
+  validateResult(r,snapshot,'primary');r.passport[0].sources[0].quote='Предмет: продажа лицензии.';
+  assert.throws(()=>validateResult(r,snapshot,'primary'),/Цитата/);
+});
+test('account isolation, uploads, immutable revisions, risks, CSRF and session revocation',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'contract-docs-test-'));
+  const origin='http://127.0.0.1:3107';const app=await createApp({dir,origin,sandbox:false,codex:fileURLToPath(new URL('./fake-codex.py',import.meta.url))});
+  await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${app.server.address().port}/docs/api`;
+  t.after(async()=>{await new Promise(resolve=>app.server.close(resolve));await rm(dir,{recursive:true,force:true});});
+  async function request(path,data,session='',method='POST',headers={}) {
+    const response=await fetch(base+path,{method:data===undefined?'GET':method,headers:{Origin:origin,'X-Docs-Request':'1','Content-Type':'application/json',Cookie:session,...headers},body:data===undefined?undefined:JSON.stringify(data)});
+    return {status:response.status,data:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]};
+  }
+  const a=await request('/register',{login:'tester_a',password:'valid-passphrase-1'});assert.equal(a.status,200);assert.match(a.cookie,/docs_session=/);
+  const b=await request('/register',{login:'tester_b',password:'valid-passphrase-2'});assert.equal(b.status,200);
+  assert.equal((await request('/login',{login:'tester_a',password:'wrong'})).status,401);
+  assert.equal((await request('/customers',{name:'Fail'},a.cookie,'POST',{'X-Docs-Request':'0'})).status,403);
+  const customer=await request('/customers',{name:'Заказчик А',inn:'7707462073'},a.cookie);assert.equal(customer.status,201);
+  const contract=await request('/contracts',{customer_id:customer.data.id,title:'Тестовый договор',contractor:'modeus'},a.cookie);assert.equal(contract.status,201);const c=contract.data.id;
+  assert.equal((await request('/contracts/'+c,undefined,b.cookie)).status,404);
+  assert.equal((await request('/contracts/'+c,{stage:'Подписан'},a.cookie,'PATCH')).status,400);
+  assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.stage,'Подготовка');
+  async function upload(bytes,name='contract.DOCX',session=a.cookie){const response=await fetch(base+'/contracts/'+c+'/files',{method:'POST',headers:{Origin:origin,'X-Docs-Request':'1','X-File-Name':encodeURIComponent(name),Cookie:session},body:bytes});return {status:response.status,data:await response.json()};}
+  assert.equal((await upload(Buffer.from('fake'),'bad.pdf')).status,415);
+  const initialDoc=docx();const first=await upload(initialDoc);assert.equal(first.status,201);assert.equal(first.data.file.status,'ready');const file=first.data.file.id;
+  const duplicate=await upload(initialDoc,'другое имя.docx');assert.equal(duplicate.data.duplicate,true);assert.equal(duplicate.data.file.id,file);
+  const otherDoc=docx('Другое содержание: сопровождение.');const concurrent=await Promise.all([upload(otherDoc,'one.docx'),upload(otherDoc,'two.docx')]);assert.equal(concurrent.filter(x=>x.data.duplicate).length,1);
+  const rev=await request('/contracts/'+c+'/revisions',{file_ids:[file],note:'Исходная'},a.cookie);assert.equal(rev.status,201);
+  assert.equal((await request('/contracts/'+c+'/revisions',{file_ids:[file]},a.cookie)).status,409);
+  assert.equal((await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie)).status,409);
+  const authdir=join(dir,'codex',a.data.id);await mkdir(authdir,{recursive:true});await writeFile(join(authdir,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));
+  const job=await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie);assert.equal(job.status,202);
+  await app.runner.tick();let checked=await request('/contracts/'+c,undefined,a.cookie);const run=checked.data.analyses[0];
+  assert.equal(run.status,'complete');assert.ok(run.primary_result&&run.review_result);assert.notEqual(run.primary_result.execution.session,run.review_result.execution.session);
+  const failedFile=await upload(docx('FAIL_REVIEW Договор на тестовые услуги.'),'failure.docx');
+  const failedRevision=await request('/contracts/'+c+'/revisions',{file_ids:[failedFile.data.file.id],parent_id:rev.data.id},a.cookie);
+  await request('/contracts/'+c+'/analyses',{revision_id:failedRevision.data.id},a.cookie);await app.runner.tick();checked=await request('/contracts/'+c,undefined,a.cookie);
+  assert.equal(checked.data.analyses[0].status,'error');assert.ok(checked.data.analyses[0].primary_result);assert.equal(checked.data.analyses[0].review_result,null);
+  const risk=await request('/contracts/'+c+'/risks',{title:'Риск выездов',severity:'high',owner:'Игорь',detail:'Не ограничены площадки.'},a.cookie);assert.equal(risk.status,201);
+  assert.equal((await request('/risks/'+risk.data.id+'/events',{kind:'incident',text:'Сигнал о выезде',due:'2026-09-03'},a.cookie)).status,201);
+  assert.equal((await request('/risks/'+risk.data.id,{status:'Закрыт',reason:'Проверены доказательства'},b.cookie,'PATCH')).status,404);
+  const updated=await request('/contracts/'+c,undefined,a.cookie);assert.equal(updated.data.risks[0].status,'Открыт');assert.equal(updated.data.risks[0].events[0].state,'unverified');
+  assert.equal((await request('/me',{current:'valid-passphrase-1',password:'valid-passphrase-new'},a.cookie,'PATCH')).status,200);
+  assert.equal((await request('/me',undefined,a.cookie)).status,401);
+});
