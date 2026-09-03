@@ -24,7 +24,7 @@ export function database(dir) {
     CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), contract_id TEXT, action TEXT NOT NULL, detail TEXT NOT NULL, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS throttle(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER NOT NULL);
   `);
-  for (const [table, name, decl] of [['risks','finding_key','TEXT']]) addColumn(db, table, name, decl);
+  for (const [table, name, decl] of [['risks','finding_key','TEXT'],['contracts','manager','TEXT']]) addColumn(db, table, name, decl);
   return db;
 }
 // Additive migration: existing rows keep NULL, old data is never rewritten.

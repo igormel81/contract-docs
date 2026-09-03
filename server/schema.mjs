@@ -10,14 +10,15 @@ export const schema = obj({
   coverage: arr(obj({ rule: string, status: { type: 'string', enum: ['checked','not_applicable','needs_data'] }, note: string }), 10),
   limitations: arr(string, 30), changes: arr(string, 100)
 });
+export const legalLimitation = 'Правовая экспертиза не выполнялась: проверенная нормативная база не подключена, правовые выводы требуют юриста.';
 const validate = new Ajv({ allErrors: true }).compile(schema);
 const normalized = value => value.replace(/\s+/g, ' ').trim();
 export function validateResult(result, snapshot, stage) {
   if (!validate(result)) throw new Error('Ответ агента не соответствует структуре результата.');
   if (result.passport.length !== 9 || new Set(result.passport.map(x => x.key)).size !== 9) throw new Error('Паспорт неполон.');
-  if (result.coverage.length !== snapshot.rules.length || new Set(result.coverage.map(x => x.rule)).size !== snapshot.rules.length || result.coverage.some(x => !snapshot.rules.some(r => r.id === x.rule))) throw new Error('Покрытие правил неполно.');
+  const covered = snapshot.rules.filter(r => r.coverage !== false);
+  if (result.coverage.length !== covered.length || new Set(result.coverage.map(x => x.rule)).size !== covered.length || result.coverage.some(x => !covered.some(r => r.id === x.rule))) throw new Error('Покрытие правил неполно.');
   if (new Set(result.findings.map(x => x.id)).size !== result.findings.length) throw new Error('Повторяющиеся ID замечаний.');
-  if(result.coverage.find(x=>x.rule==='LAW-01')?.status!=='needs_data') throw new Error('Нельзя подтверждать законодательство без нормативной базы.');
   const blocks = new Map(snapshot.documents.flatMap(f => f.blocks.map(b => [`${f.id}:${b.id}`, b.text])));
   for (const item of [...result.passport, ...result.findings]) {
     if (item.status === 'extracted' && !item.sources.length) throw new Error('У фактического условия нет источника.');
@@ -28,5 +29,7 @@ export function validateResult(result, snapshot, stage) {
     if (item.rule && !snapshot.rules.some(r => r.id === item.rule)) throw new Error('Неизвестное правило.');
     if (item.review && (stage === 'primary' ? item.review !== 'primary' : item.review === 'primary')) throw new Error('Неверный статус ревью.');
   }
+  // A criterion that can never fire is not a check: the legal caveat is stated once, by the server.
+  if (!result.limitations.some(x => x.includes(legalLimitation.slice(0, 40)))) result.limitations.push(legalLimitation);
   return result;
 }

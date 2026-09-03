@@ -94,6 +94,7 @@ export class CodexRunner {
     const prompt = `${sharedInstruction}\n${stage === 'primary' ? analystInstruction : reviewerInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(snapshot)}\n${primary ? 'РЕЗУЛЬТАТ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(primary) : ''}`;
     const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
+    const startedAt = Date.now();
     return await new Promise((resolve, reject) => {
       const env = isolatedHome ? { ...this.env(), CODEX_HOME: isolatedHome, CODEX_SQLITE_HOME: isolatedHome, TMPDIR: cwd, XDG_CACHE_HOME: join(cwd,'cache'), RUST_LOG: 'off', OTEL_SDK_DISABLED: 'true' } : this.env();
       const child = spawn(this.binary, args, { cwd, env, stdio: ['pipe','pipe','pipe'] });
@@ -115,7 +116,8 @@ export class CodexRunner {
           const result = resultSources(validateResult(JSON.parse(messages.at(-1)?.item.text || '{}'), snapshot, stage),snapshot,context.temporary?null:analysis);
           const session = events.find(e => e.type === 'thread.started')?.thread_id ?? null;
           const usage = events.find(e => e.type === 'turn.completed')?.usage ?? null;
-          resolve({ ...result, execution: { session, usage, stage, completed: now() } });
+          // Usage stays null when Codex does not report it: an absent number is not zero.
+          resolve({ ...result, execution: { session, usage, stage, completed: now(), promptChars: prompt.length, durationMs: Date.now() - startedAt } });
         } catch (e) { reject(e); }
       });
     });

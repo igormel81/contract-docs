@@ -27,7 +27,7 @@ test('formats and similarity never use name as content identity',()=>{
 });
 test('grounded schema rejects fabricated citations',()=>{
   const snapshot={documents:[{id:'file',blocks:[{id:'b1',text:'Предмет: внедрение системы.'}]}],rules};
-  const r={summary:'Внедрение системы',passport:['subject','result','term','price','payment','location','acceptance','dependencies','special'].map(key=>({key,title:key,value:'Не найдено',status:'missing',sources:[]})),findings:[],coverage:rules.map(r=>({rule:r.id,status:'needs_data',note:'Проверить'})),limitations:['Нет нормативной базы'],changes:[]};
+  const r={summary:'Внедрение системы',passport:['subject','result','term','price','payment','location','acceptance','dependencies','special'].map(key=>({key,title:key,value:'Не найдено',status:'missing',sources:[]})),findings:[],coverage:rules.filter(x=>x.coverage!==false).map(r=>({rule:r.id,status:'needs_data',note:'Проверить'})),limitations:['Нет нормативной базы'],changes:[]};
   assert.equal(validateResult(r,snapshot,'primary'),r);
   r.passport[0]={key:'subject',title:'Предмет',value:'Внедрение',status:'extracted',sources:[{fileId:'file',blockId:'b1',quote:'Предмет: внедрение системы.'}]};
   validateResult(r,snapshot,'primary');r.passport[0].sources[0].quote='Предмет: продажа лицензии.';
@@ -91,6 +91,19 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed[0].key,candidate);
   assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,restore:true},a.cookie)).status,200);
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed.length,0,'Dismissal is reversible');
+  async function summary(analysisId,session,query=''){const response=await fetch(`${base}/analyses/${analysisId}/summary${query}`,{headers:{Origin:origin,Cookie:session}});return {status:response.status,text:await response.text()};}
+  assert.equal((await summary(run.id,b.cookie)).status,404,'A summary follows contract access');
+  assert.equal((await request('/contracts/'+c,{manager:'Мария, менеджер'},a.cookie,'PATCH')).status,200);
+  const letter=await summary(run.id,a.cookie);
+  assert.equal(letter.status,200);
+  assert.match(letter.text,/^Для: Мария, менеджер/);
+  assert.match(letter.text,/Статус: ревью завершено/);
+  assert.match(letter.text,/Замечаний: 1 · высокой критичности 0, средней 1, низкой 0\./);
+  assert.match(letter.text,/п\. 6\.2/,'References use the original clause number');
+  assert.ok(!/blockId|b1/.test(letter.text),'Internal identifiers never reach a message');
+  assert.match(letter.text,/Правовая экспертиза не выполнялась/);
+  assert.match((await summary(run.id,a.cookie,'?scope=full')).text,/Тестовый риск места работ/,'The full list keeps findings below high severity');
+  assert.ok((await request('/contracts/'+c,undefined,a.cookie)).data.history.some(e=>e.action==='Сформирован текст замечаний для отправки'),'Export of contract text is journalled');
   const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:'custis',kind:'template'},b.cookie);assert.equal(contractB.status,201);
   const wrongContract=await request('/contracts',{title:'Другой договор',contractor:'custis',customer_id:customer.data.id},a.cookie);
   assert.equal((await request('/contracts/'+wrongContract.data.id+'/risks',{title:'Чужой пункт',severity:'medium',owner:'Игорь',detail:'Проверка',origin:run.id+':test-finding'},a.cookie)).status,400);

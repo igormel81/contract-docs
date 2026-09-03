@@ -46,7 +46,7 @@ document = snapshot['documents'][0]
 block = document['blocks'][0]
 passport = [{'key':key,'title':key,'value':'Не найдено','status':'missing','sources':[]} for key in fields]
 passport[0].update(value=block['text'], status='extracted', sources=[{'fileId':document['id'],'blockId':block['id'],'quote':block['text']}])
-output = {'summary':'Только тестовая сводка', 'passport':passport, 'findings':[], 'coverage':[{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules']], 'limitations':['Тестовая модель, не настоящий анализ'], 'changes':['Проверен тестовый результат'] if review else []}
+output = {'summary':'Только тестовая сводка', 'passport':passport, 'findings':[], 'coverage':[{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules'] if r.get('coverage', True)], 'limitations':['Тестовая модель, не настоящий анализ'], 'changes':['Проверен тестовый результат'] if review else []}
 output['findings'] = [{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'proposal':'Уточнить порядок согласования места выполнения работ.','review':'confirmed' if review else 'primary'}]
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(output)}}))

@@ -12,6 +12,7 @@ import { CodexRunner } from './codex.mjs';
 import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
 import { findingKey } from '../public/document-ui.js';
+import { summaryText } from '../public/summary.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
@@ -48,7 +49,7 @@ export async function createApp(options = {}) {
     if (!row) throw new HttpError(404, 'Редакция не найдена.'); return row;
   }
   const fileView = f => ({ ...f, extraction: parse(f.extraction) });
-  const analysisView = a => ({ ...a, snapshot: undefined, primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
+  const analysisView = a => ({ ...a, snapshot: undefined, rules: (parse(a.snapshot)?.rules || []).map(r => ({ id: r.id, version: r.version ?? null })), primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
   function originFinding(origin,contract,user){
     const split=origin.indexOf(':');if(split<1)throw new HttpError(400,'Некорректная ссылка на замечание.');
     const run=owned('analyses',origin.slice(0,split),user);if(run.contract_id!==contract)throw new HttpError(400,'Замечание относится к другому договору.');
@@ -83,7 +84,7 @@ export async function createApp(options = {}) {
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
     if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.4' });
-    const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
+    const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));
       res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }); return res.end(content);
@@ -190,6 +191,11 @@ export async function createApp(options = {}) {
       });
       if (!action && req.method === 'PATCH') {
         const input = await jsonBody(req);
+        if (input.manager !== undefined) {
+          const manager=String(input.manager||'').trim().slice(0,200);
+          tx(db,()=>{db.prepare('UPDATE contracts SET manager=? WHERE id=?').run(manager||null,contract.id);audit(db,user.id,contract.id,'Указан ответственный за договор',manager||'не указан');});
+          return send(res,200,{ok:true});
+        }
         const reason=required(input.reason,1000), stage=choice(input.stage,['Подготовка','Согласование','Подписан','Исполнение','Завершён','Прекращён','Архив']);
         tx(db,()=>{db.prepare('UPDATE contracts SET stage=? WHERE id=?').run(stage,contract.id);audit(db,user.id,contract.id,'Изменена стадия',`${stage}: ${reason}`);}); return send(res,200,{ok:true});
       }
@@ -297,13 +303,28 @@ export async function createApp(options = {}) {
         try{const result=await extract(join(dir,'files',f.id),f.ext,sandbox);if(match[2]==='structure'&&result.status!=='ready')throw new HttpError(422,'Не удалось обновить структуру. Прежний текст и анализы сохранены.');db.prepare('UPDATE files SET status=?,extraction=? WHERE id=?').run(result.status,JSON.stringify(result.extraction),f.id); return send(res,200,result);} finally{uploading--;}
       }
     }
-    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export|documents)$/);
+    match=path.match(/^\/docs\/api\/analyses\/([\w-]+)\/(retry|cancel|recommendation|export|documents|summary)$/);
     if(match){
       const analysis=owned('analyses',match[1],user.id); const action=match[2];
       if(action==='documents'&&req.method==='GET')return send(res,200,parse(analysis.snapshot).documents);
       if(action==='export'&&req.method==='GET'){
         const edited=db.prepare('SELECT * FROM recommendations WHERE analysis_id=?').all(analysis.id);
+        audit(db,user.id,analysis.contract_id,'Выгружен результат анализа (JSON)',analysis.id);
         res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="contract-analysis.json"'}); return res.end(JSON.stringify({...analysisView(analysis),recommendations:edited},null,2));
+      }
+      if(action==='summary'&&req.method==='GET'){
+        const stored=parse(analysis.review_result||analysis.primary_result);
+        if(!stored) throw new HttpError(409,'Результат ещё не получен.');
+        const card=owned('contracts',analysis.contract_id,user.id);
+        const snapshot=parse(analysis.snapshot), full=url.searchParams.get('scope')==='full';
+        const text=summaryText({full,result:resultSources(stored,snapshot,analysis.id),meta:{
+          title:card.title, customer:card.customer_id?db.prepare('SELECT name FROM customers WHERE id=?').get(card.customer_id)?.name:null,
+          contractor:profiles[card.contractor].name, manager:card.manager||null,
+          revision:db.prepare('SELECT number FROM revisions WHERE id=?').get(analysis.revision_id)?.number,
+          created:new Date(analysis.created).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'}),
+          reviewed:Boolean(analysis.review_result), link:`${origin}/docs/#${card.id}`, files:snapshot.documents}});
+        audit(db,user.id,card.id,'Сформирован текст замечаний для отправки',`${full?'полный список':'короткая сводка'}, ${text.length} знаков`);
+        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8',...(url.searchParams.get('download')?{'Content-Disposition':'attachment; filename="contract-findings.txt"'}:{})}); return res.end(text);
       }
       if(req.method==='POST'&&action==='retry'){
         if(!['error','interrupted'].includes(analysis.status)) throw new HttpError(409,'Эта попытка не требует повторения.');

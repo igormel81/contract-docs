@@ -1,4 +1,5 @@
 import { sourceLabel, documentText, compactPassport } from './document-ui.js';
+import { summaryText } from './summary.js';
 export function textReport(packet, profileName) {
   const result=packet.review_result||packet.primary_result;
   if(!result)return '';
@@ -16,7 +17,7 @@ export function textReport(packet, profileName) {
 
 export class QuickUI {
   constructor(deps){Object.assign(this,deps);this.reset();}
-  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.returnTab='files';this.source=null;this.profile='custis';this.error='';this.batch=false;}
+  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.returnTab='files';this.source=null;this.profile='custis';this.error='';this.batch=false;this.summary='';}
   async open(){this.error='';const generation=this.generation,list=await this.api('/quick-checks');if(generation!==this.generation)return;this.packet=list[0]||null;if(this.packet)this.profile=this.packet.contractor;}
   async refresh(){
     if(!this.packet)return;
@@ -43,7 +44,7 @@ export class QuickUI {
     const {esc,btn}=this,p=this.packet,result=p?.review_result||p?.primary_result;
     const statuses={draft:'Готов к загрузке',queued:'В общей очереди',primary:'Первичный анализ',review:'Независимое ревью',complete:'Ревью завершено',error:'Ошибка этапа',cancelled:'Проверка отменена'};
     if(!p||p.status==='draft')return `<div class="flow analysis-result">${this.layoutButton()}<div class="empty"><h2>Одна проверка, без архива</h2><p>Загрузите договор с приложениями. Аналитик сформирует паспорт и замечания, ревьюер проверит выводы и предложенные правки по исходникам.</p><p>Заказчик, карточка договора и редакции не создаются.</p></div></div>`;
-    return `<div class="flow analysis-result" data-result-key="${esc(p.id)}"><div class="row between"><h2>Анализ и рекомендации</h2>${this.layoutButton()}</div><h2 role="status">${esc(statuses[p.status])}</h2><div class="step-line"><div class="step ${p.primary_result?'done':p.status==='primary'?'running':''}">Аналитик<br>${p.primary_result?'Результат получен':'Ожидается'}</div><div class="step ${p.review_result?'done':p.status==='review'?'running':''}">Ревьюер<br>${p.review_result?'Проверено':'Не завершено'}</div></div>${p.error?`<p class="error" role="alert">${esc(p.error)}</p>`:''}${p.status==='error'?btn(p.primary_result?'Повторить ревью':'Повторить анализ','quick-run','','primary',!this.getBoot().codex.connected):''}${result?`${!p.review_result?'<p class="warning">Это первичный результат. Ревью ещё не завершено.</p>':''}<p>${esc(result.summary)}</p>${btn(p.review_result?'Скачать отчёт (.txt)':'Скачать первичный отчёт','quick-export','','primary')}<div class="finding">${btn('Открыть паспорт','quick-tab','passport','quiet')}</div>${result.findings.map(f=>`<article class="finding"><small>${esc(f.rule)} · ${esc({high:'Высокий риск',medium:'Средний риск',low:'Низкий риск'}[f.severity])}</small><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p><h3>Предлагаемая формулировка</h3><p class="source-block">${esc(f.proposal)}</p><div>${this.refs(f.sources)}</div></article>`).join('')||'<p>Замечания не сформированы. Это не подтверждение отсутствия рисков.</p>'}<h3>Ограничения</h3>${result.limitations.map(l=>`<p class="muted">${esc(l)}</p>`).join('')}<details><summary>Покрытие правил</summary>${result.coverage.map(c=>`<p>${esc(c.rule)}: ${esc({checked:'Проверено',not_applicable:'Не применимо',needs_data:'Нужны данные'}[c.status])}. ${esc(c.note)}</p>`).join('')}</details>`:'<p class="muted">Можно оставить эту страницу открытой. Результат появится автоматически, после обновления страницы текущую проверку можно продолжить.</p>'}</div>`;
+    return `<div class="flow analysis-result" data-result-key="${esc(p.id)}"><div class="row between"><h2>Анализ и рекомендации</h2>${this.layoutButton()}</div><h2 role="status">${esc(statuses[p.status])}</h2><div class="step-line"><div class="step ${p.primary_result?'done':p.status==='primary'?'running':''}">Аналитик<br>${p.primary_result?'Результат получен':'Ожидается'}</div><div class="step ${p.review_result?'done':p.status==='review'?'running':''}">Ревьюер<br>${p.review_result?'Проверено':'Не завершено'}</div></div>${p.error?`<p class="error" role="alert">${esc(p.error)}</p>`:''}${p.status==='error'?btn(p.primary_result?'Повторить ревью':'Повторить анализ','quick-run','','primary',!this.getBoot().codex.connected):''}${result?`${!p.review_result?'<p class="warning">Это первичный результат. Ревью ещё не завершено.</p>':''}<p>${esc(result.summary)}</p>${btn(p.review_result?'Скачать отчёт (.txt)':'Скачать первичный отчёт','quick-export','','primary')}${btn('Текст для менеджера','quick-summary','','compact-action')}${this.summary?`<section class="flow summary-panel"><div class="row between"><h3>Текст для менеджера</h3>${btn('Закрыть','quick-summary-close','','quiet compact-action')}</div><p class="muted">Собран из полученного результата без обращения к модели. В тексте указано, что результат нигде не сохранён.</p><div class="row">${btn('Скопировать','quick-summary-copy','','primary compact-action')}</div><label class="sr-only" for="summary-text">Текст замечаний</label><textarea id="summary-text" readonly rows="12">${esc(this.summary)}</textarea></section>`:''}<div class="warning">Риски здесь не сохраняются: реестр, редакции и история ведутся только в хранилище.${btn('Вести этот договор постоянно','from-quick','','quiet compact-action')}</div><div class="finding">${btn('Открыть паспорт','quick-tab','passport','quiet')}</div>${result.findings.map(f=>`<article class="finding"><small>${esc(f.rule)} · ${esc({high:'Высокий риск',medium:'Средний риск',low:'Низкий риск'}[f.severity])}</small><h3>${esc(f.title)}</h3><p>${esc(f.description)}</p><h3>Предлагаемая формулировка</h3><p class="source-block">${esc(f.proposal)}</p><div>${this.refs(f.sources)}</div></article>`).join('')||'<p>Замечания не сформированы. Это не подтверждение отсутствия рисков.</p>'}<h3>Ограничения</h3>${result.limitations.map(l=>`<p class="muted">${esc(l)}</p>`).join('')}<details><summary>Покрытие правил</summary>${result.coverage.map(c=>`<p>${esc(c.rule)}: ${esc({checked:'Проверено',not_applicable:'Не применимо',needs_data:'Нужны данные'}[c.status])}. ${esc(c.note)}</p>`).join('')}</details>`:'<p class="muted">Можно оставить эту страницу открытой. Результат появится автоматически, после обновления страницы текущую проверку можно продолжить.</p>'}</div>`;
   }
   view(){
     const {btn,esc}=this,p=this.packet;
@@ -101,6 +102,16 @@ export class QuickUI {
       if(!confirm('Удалить временный пакет и результаты? Текущий анализ будет остановлен. Восстановить пакет нельзя.')){button.disabled=false;return;}
       const key=this.packet.id,discardGeneration=++this.generation;this.xhr?.abort();this.rows=[];this.batch=false;
       await this.api(`/quick-checks/${key}/discard`,{});if(discardGeneration!==this.generation)return;this.reset();this.notice('Временный пакет удалён. Скачанные вами отчёты не затронуты.');
+    }
+    if(action==='quick-summary'){
+      const p=this.packet,result=p.review_result||p.primary_result;
+      this.summary=summaryText({result,meta:{title:'Разовая проверка договора',contractor:this.getBoot().profiles[p.contractor].name,created:this.date(p.created),reviewed:Boolean(p.review_result),temporary:true,files:p.files}});
+    }
+    if(action==='quick-summary-close')this.summary='';
+    if(action==='quick-summary-copy'){
+      try{await navigator.clipboard.writeText(this.summary);this.notice('Текст скопирован в буфер обмена.');}
+      catch{const area=document.querySelector('#summary-text');if(area){area.focus();area.select();}this.notice('Копирование в буфер недоступно: скопируйте выделенный текст сочетанием клавиш.');}
+      button.disabled=false;return;
     }
     if(action==='quick-export'){
       const text=textReport(this.packet,this.getBoot().profiles[this.packet.contractor].name);
