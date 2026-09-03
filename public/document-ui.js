@@ -1,3 +1,8 @@
+// Один словарь на все экраны. Раньше критичность называлась «Высокий» на бейдже,
+// «Высокая» в форме, «Высокий риск» в разовой проверке и «высокая» в тексте письма.
+export const severityLabels = { high:'Высокая', medium:'Средняя', low:'Низкая' };
+export const coverageLabels = { checked:'Проверено', needs_data:'Нужны данные', not_applicable:'Не применимо' };
+export const stageLabels = { queued:'В очереди', primary:'Первичный анализ', review:'Независимое ревью', complete:'Ревью завершено', error:'Ошибка этапа', interrupted:'Прервано', cancelled:'Отменено' };
 export function locationLabel(block) {
   const location=block?.locator;
   const label=location?.status==='uncertain'?'Номер требует проверки':location?.label||'По цитате (номер не восстановлен)';

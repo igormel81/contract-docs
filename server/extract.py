@@ -127,10 +127,15 @@ def marker(text):
     named = re.match(r'^(Раздел|Глава|Статья|Приложение)\s+(?:№\s*)?([0-9]+(?:\.[0-9]+)*|[IVXLCDM]+|[А-ЯA-Z])\b',line,re.I)
     if named:
         return named.group(0), named.group(2), 'section', line
-    # Dates, amounts and prose references to other clauses are not clause starts.
+    # Dates, amounts, rates and prose references to other clauses are not clause starts.
     if re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}\b',line):
         return None
-    numbered = re.match(r'^((?:\d{1,3}\.)+\d{1,3}[.)]?|\d{1,3}[.)]|[а-яa-z][)]|[IVXLCDM]+[.)])\s+(?=\S)',line)
+    # A decimal share reads like a clause number: "4.5 % of the price", "0.5 of a rate".
+    # A borrowed number is worse than a missing one, so both are left unnumbered.
+    if re.match(r'^\d{1,3}\.\d{1,3}\s*[%‰]',line) or re.match(r'^0\.\d',line):
+        return None
+    # The number may end the line: PDF layout often puts it above its own text.
+    numbered = re.match(r'^((?:\d{1,3}\.)+\d{1,3}[.)]?|\d{1,3}[.)]|[а-яa-z][)]|[IVXLCDM]+[.)])(?:\s+(?=\S)|\s*$)',line)
     if not numbered:
         return None
     raw = numbered.group(1)

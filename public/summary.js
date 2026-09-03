@@ -1,7 +1,7 @@
-import { sourceLabel } from './document-ui.js';
+import { sourceLabel, severityLabels } from './document-ui.js';
 // Built from the stored result by code, never by the model: no tokens, no delay
 // and no second retelling that could soften a limitation on its way to a person.
-const severityWord = { high: 'высокая', medium: 'средняя', low: 'низкая' };
+const severityWord = key => severityLabels[key].toLowerCase();
 const trim = (value, length) => {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (text.length <= length) return text;
@@ -28,7 +28,7 @@ export function summaryText({ meta, result, full = false }) {
   if (!full && shown.length < result.findings.length) lines.push(`Ниже ${shown.length} из ${result.findings.length} в порядке критичности; полный список — в приложении.`);
   lines.push('');
   shown.forEach((finding, index) => {
-    lines.push(`${index + 1}. [${finding.rule} · ${severityWord[finding.severity]}] ${finding.title}`);
+    lines.push(`${index + 1}. [${finding.rule} · ${severityWord(finding.severity)}] ${finding.title}`);
     lines.push(trim(finding.description, full ? 700 : 300));
     const reference = finding.sources[0];
     if (reference) {

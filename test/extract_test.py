@@ -60,6 +60,28 @@ class Extraction(unittest.TestCase):
         self.assertIsNone(items[0]['locator']['number'])
         self.assertFalse(items[0]['text'].startswith('1.'))
 
+    def test_every_numbering_style_is_recognised(self):
+        for line, label in [('1. Общие положения','п. 1'),('2) Порядок оплаты','п. 2'),('а) первый подпункт','п. а'),
+                            ('IV. Ответственность','п. IV'),('1.2.3.4. Глубокий пункт','п. 1.2.3.4'),('2.1 Без точки в конце','п. 2.1'),
+                            ('Раздел 3. Приёмка','Раздел 3'),('Статья 5 Ответственность','Статья 5'),
+                            ('Глава II Общие условия','Глава II'),('Приложение № 2 Смета','Приложение № 2')]:
+            self.assertEqual(extract['marker'](line)[0], label, line)
+
+    def test_numbers_are_never_borrowed_from_prose(self):
+        for line in ['4.5 % от суммы договора','0.5 ставки специалиста','03.09.2026 Дата договора',
+                     'Согласно п. 5.1 договора','1 500 000 рублей составляет цена']:
+            self.assertIsNone(extract['marker'](line), line)
+
+    def test_number_on_its_own_line_keeps_the_clause(self):
+        items=extract['structure'](list(extract['text_paragraphs']('5.\nИсполнитель обеспечивает доступ.\n\n6.1\nОплата в течение 10 дней.',1)))
+        self.assertEqual([p['locator']['label'] for p in items],['п. 5','п. 6.1'])
+
+    def test_same_number_in_two_parts_stays_distinguishable(self):
+        items=extract['structure'](list(extract['text_paragraphs']('Раздел 1. Предмет\n\n1.1. Работы удалённо.\n\nПриложение № 2 Смета\n\n1.1. Стоимость этапа.',1)))
+        clauses=[p for p in items if p['locator']['kind']=='clause']
+        self.assertEqual([p['locator']['label'] for p in clauses],['п. 1.1','п. 1.1'])
+        self.assertEqual([p['locator']['section'] for p in clauses],['Раздел 1','Приложение № 2'])
+
     def test_tables_keep_cells_and_text(self):
         table='<w:tbl><w:tr><w:tc>'+paragraph('Срок')+'</w:tc><w:tc>'+paragraph('10 дней')+'</w:tc></w:tr></w:tbl>'
         items=document(paragraph('1. Условия')+table+paragraph('2. Оплата'))
