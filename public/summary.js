@@ -40,7 +40,7 @@ export function summaryText({ meta, result, full = false }) {
   if (!shown.length) lines.push('Замечания в этой сводке не приводятся. Отсутствие замечаний не подтверждает отсутствие рисков.', '');
   lines.push('ОГРАНИЧЕНИЯ ПРОВЕРКИ', ...result.limitations.map(x => `— ${x}`));
   if (meta.link) lines.push('', `Открыть в приложении: ${meta.link}`);
-  lines.push('', 'Выводы AI требуют проверки сотрудником. Правовая экспертиза не выполнялась: проверенная нормативная база не подключена.');
+  lines.push('', 'Это рекомендательный разбор для переговоров, а не заключение о соответствии: выводы требуют проверки сотрудником. Правовая экспертиза не выполнялась, нормативная база не подключена.');
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 // Messengers cut long messages; splitting on paragraph boundaries keeps a finding whole.
