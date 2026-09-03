@@ -24,9 +24,22 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   }
   browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN,headless:true});
   const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.setViewport({width:1440,height:900});
+  async function assertNeutralInterface(){
+    const copy=await page.evaluate(()=>{
+      const clone=document.body.cloneNode(true);
+      clone.querySelectorAll('select').forEach(el=>el.remove());
+      return clone.textContent;
+    });
+    assert.doesNotMatch(copy,/Кастис|Модеус|ООО «ЗИС»/i);
+  }
   await page.goto('http://127.0.0.1:3119/docs/',{waitUntil:'networkidle0'});
+  await assertNeutralInterface();
+  assert.equal(await page.$eval('meta[name=description]',el=>el.content),'Внутреннее рабочее место для договоров, редакций и рисков.');
   await page.click('[data-action=auth-mode]');await page.type('[name=login]','owner');await page.type('[name=password]','synthetic-ui-password');await page.click('[data-form=auth] [type=submit]');
   await page.waitForSelector('[data-action=quick-open]');await page.click('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
+  await assertNeutralInterface();
+  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Кастис/);
+  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Модеус/);
   await page.select('#quick-contractor','modeus');
   assert.equal(await page.$eval('#quick-contractor',el=>el.value),'modeus');
   await (await page.$('#quick-file-picker')).uploadFile(join(root,'Договор.docx'),join(root,'Приложение.docx'));
@@ -81,6 +94,13 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await app.runner.tick();await page.goto('http://127.0.0.1:3119/docs/#'+stored);await page.reload({waitUntil:'networkidle0'});await page.waitForSelector('.passport-compact');
   assert.equal(await page.$('.passport-strip'),null);assert.equal(await page.$$eval('.passport-row',els=>els.length),9);
   assert.match(await page.$eval('[data-action=source]',el=>el.textContent),/п. 6.2/);
+  await assertNeutralInterface();
+  await page.click('[data-action=new-contract]');
+  await page.waitForSelector('[data-form=contract] [name=contractor]');
+  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Кастис/);
+  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Модеус/);
+  await assertNeutralInterface();
+  await page.click('[data-action=cancel-form]');
   const originalCount=app.db.prepare('SELECT count(*) n FROM analyses').get().n;
   await page.$eval('[data-form=recommendation] textarea',el=>{el.value='Уточнить оплату по п. 6.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.select('[data-form=recommendation] select','planned');
@@ -120,6 +140,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.doesNotMatch(await page.$eval('.source-block.highlight small',el=>el.textContent),/\bb\d+\b/);
   await page.screenshot({path:join(screenshotDir,'center-risk-1440.png'),fullPage:true});assert.deepEqual(errors,[]);
   console.log('PASS center and side layouts: saved/quick, source links, draft preservation, saving decisions, same run, keyboard focus, 1440/768/375.');
+  console.log('PASS neutral login, header, catalogue and contract context; both contractor choices preserved.');
   console.log('PASS compact passport, original clause links, saved risk with frozen revision and source.');
   console.log('PASS quick UI: batch, dedup, contractor, two stages, source, export, refresh, delete, empty catalogue, responsive 1440/768/375.');
 }finally{await browser?.close();await app.close();await rm(root,{recursive:true,force:true});}
