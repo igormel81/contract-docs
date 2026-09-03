@@ -8,7 +8,7 @@ import { createApp } from '../server/main.mjs';
 import { format, similarity } from '../server/documents.mjs';
 import { validateResult } from '../server/schema.mjs';
 import { rules } from '../server/rules.mjs';
-import { findingKey } from '../public/document-ui.js';
+import { findingKey, clauseDiff } from '../public/document-ui.js';
 import { fileURLToPath } from 'node:url';
 
 export function docx(text='Договор. Предмет: внедрение системы. Срок: 30 дней после аванса.') {
@@ -32,6 +32,18 @@ test('grounded schema rejects fabricated citations',()=>{
   r.passport[0]={key:'subject',title:'Предмет',value:'Внедрение',status:'extracted',sources:[{fileId:'file',blockId:'b1',quote:'Предмет: внедрение системы.'}]};
   validateResult(r,snapshot,'primary');r.passport[0].sources[0].quote='Предмет: продажа лицензии.';
   assert.throws(()=>validateResult(r,snapshot,'primary'),/Цитата/);
+});
+test('clause comparison marks what changed, what moved and what disappeared',()=>{
+  const blocks=(...items)=>({extraction:{blocks:items.map(([id,number,text])=>({id,text,locator:{number,label:'п. '+number}}))}});
+  const files=[{id:'v1',name:'Договор.docx',...blocks(['b1','1','1. Предмет: внедрение системы.'],['b2','2','2. Оплата в течение 10 дней.'],['b3','3','3. Место работ: Москва.'])},
+               {id:'v2',name:'Договор.docx',...blocks(['c1','1','1. Предмет: внедрение системы.'],['c2','2','2. Оплата в течение 30 дней.'],['c3','4','4. Место работ: Москва.'],['c4','5','5. Приёмка по акту.'])}];
+  const rows=clauseDiff({file_ids:['v1']},{file_ids:['v2']},files);
+  const marks=Object.fromEntries(rows.map(row=>[(row.item||row.was).block.id,row.state]));
+  assert.equal(marks.c1,'same','Одинаковый пункт не считается изменённым');
+  assert.equal(marks.c2,'changed','Изменённый срок виден как изменение');
+  assert.equal(marks.c3,'moved','Перенумерованный пункт не выглядит удалённым и новым');
+  assert.equal(marks.c4,'new');
+  assert.equal(rows.filter(row=>row.state==='gone').length,0,'Ничего не потеряно');
 });
 test('account isolation, uploads, immutable revisions, risks, CSRF and session revocation',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'contract-docs-test-'));

@@ -1,5 +1,5 @@
 import { QuickUI } from './quick.js';
-import { sourceLabel, documentText, compactPassport, locationLabel, findingKey, severityLabels, coverageLabels, stageLabels } from './document-ui.js';
+import { sourceLabel, documentText, compactPassport, locationLabel, findingKey, severityLabels, coverageLabels, stageLabels, clauseDiff } from './document-ui.js';
 import { messageParts } from './summary.js';
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -71,9 +71,24 @@ function passportView() {
 function versionsView() { return `<div class="flow"><div class="row between"><h2>Редакции</h2>${btn('Сравнить','compare','','',state.contract.revisions.length<2)}</div>${state.contract.revisions.map(r=>`<article class="version"><div class="row between"><h3>v${r.number} ${state.contract.effective_id===r.id?badge('Действующий','good'):''}</h3>${btn('Открыть','revision',r.id,'compact-action')}</div><small>${date(r.created)} · ${r.file_ids.length} файлов</small><p>${esc(r.note)}</p><p class="muted">Основана на ${r.parent_id?'v'+state.contract.revisions.find(x=>x.id===r.parent_id)?.number:'исходном комплекте'}</p>${btn('Подтвердить действующий комплект','effective',r.id,'quiet compact-action')}</article>`).join('')||'<p class="muted">Редакций пока нет. Зафиксируйте первый комплект на вкладке загрузки.</p>'}${btn('Изменить стадию договора','stage','','quiet')}</div>`; }
 function compareView() {
   const versions=state.contract.revisions;
-  const left=versions.find(v=>v.id===state.compareLeft)||versions[1],right=versions.find(v=>v.id===state.compareRight)||versions[0];
-  function side(r,name){return `<div><label>Редакция<select id="${name}">${versions.map(v=>`<option value="${v.id}" ${v.id===r?.id?'selected':''}>v${v.number}</option>`).join('')}</select></label><pre>${esc(r?.file_ids.map(id=>{const f=state.contract.files.find(f=>f.id===id);return f.name+'\n'+(f.extraction?.blocks||[]).map(b=>b.text).join('\n');}).join('\n\n')||'')}</pre></div>`;}
-  return `<div class="flow"><h2>Сравнение исходников</h2><p class="muted">Два комплекта рядом. Автоматический смысловой diff появится в следующей версии; это не заключение об отсутствии изменений.</p><div class="comparison">${side(left,'compare-left')}${side(right,'compare-right')}</div></div>`;
+  const right=versions.find(v=>v.id===state.compareRight)||versions[0];
+  const left=versions.find(v=>v.id===state.compareLeft)||versions.find(v=>v.id!==right?.id)||versions[1];
+  const picker=(current,name,title)=>`<label>${title}<select id="${name}">${versions.map(v=>`<option value="${v.id}" ${v.id===current?.id?'selected':''}>v${v.number}</option>`).join('')}</select></label>`;
+  if(!left||!right||left.id===right.id)return `<div class="flow"><h2>Сравнение редакций</h2><div class="row">${picker(left,'compare-left','Была')}${picker(right,'compare-right','Стала')}</div><p class="muted">Выберите две разные редакции.</p></div>`;
+  const rows=clauseDiff(left,right,state.contract.files), only=state.compareOnlyChanged!==false;
+  const counts={changed:0,new:0,gone:0,moved:0,same:0};
+  for(const row of rows)counts[row.state]++;
+  const titles={changed:'изменён',new:'новый',gone:'удалён',moved:'перенумерован',same:'без изменений'};
+  const shown=rows.filter(row=>!only||row.state!=='same');
+  return `<div class="flow"><h2>Сравнение редакций</h2><div class="row">${picker(left,'compare-left','Была')}${picker(right,'compare-right','Стала')}</div>
+    <div class="row">${badge('изменено '+counts.changed,counts.changed?'medium':'')}${badge('новых '+counts.new,counts.new?'medium':'')}${badge('удалено '+counts.gone,counts.gone?'high':'')}${badge('перенумеровано '+counts.moved)}${badge('без изменений '+counts.same,'good')}</div>
+    <p class="muted">Сопоставление по номеру пункта, а при его отсутствии — по тексту. Это разметка текстовых изменений, а не смысловой разбор: совпадение текста не означает, что условие не изменилось по смыслу.</p>
+    ${btn(only?'Показать все пункты':'Только изменения','compare-filter','','compact-action')}
+    ${shown.map(row=>{
+      const item=row.item||row.was;
+      const label=(item.block.locator?.label||'Без номера')+' · '+item.file;
+      return `<article class="version"><div class="row">${badge(titles[row.state],row.state==='gone'?'high':row.state==='same'?'good':'medium')}<small>${esc(label)}</small></div>${row.state==='changed'?`<p class="muted">Было: ${esc(row.was.text.slice(0,400))}</p><p>Стало: ${esc(row.item.text.slice(0,400))}</p>`:`<p>${esc((item.text||'').slice(0,400))}</p>`}</article>`;
+    }).join('')||'<p class="muted">Различий не найдено.</p>'}</div>`;
 }
 function settingsView() {
   const connection=state.boot.codex;
@@ -206,6 +221,7 @@ document.addEventListener('click',async event=>{
     if(action==='risk-source'){const [riskId,index]=JSON.parse(value),ref=state.contract.risks.find(r=>r.id===riskId).sources[index];state.source={...ref,riskId};state.sourceDocuments=[{id:ref.fileId,name:ref.fileName,extraction:{blocks:[ref.block],warnings:[]}}];state.center='document';state.form=null;}
     if(action==='revision'){state.source=null;state.sourceDocuments=null;state.revisionId=value;state.runId=null;state.selections.delete(state.contractId);state.center='passport';}
     if(action==='compare'){state.center='compare';state.form=null;}
+    if(action==='compare-filter')state.compareOnlyChanged=state.compareOnlyChanged===false;
     if(action==='effective')state.form={type:'effective',id:value};
     if(action==='stage')state.form={type:'stage'};
     if(action==='analyze'){await api('/contracts/'+state.contractId+'/analyses',{revision_id:state.revisionId});state.source=null;state.sourceDocuments=null;state.runId=null;state.right='analysis';await refreshContract();notice('Комплект поставлен в очередь анализа.');}

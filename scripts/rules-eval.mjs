@@ -34,7 +34,11 @@ async function ask(fragment, profile) {
       const started = Date.now();
       child.stdout.on('data', chunk => { output += chunk; });
       child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-4000); });
-      child.stdin.end(`${sharedInstruction}\n${analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(snapshot)}`);
+      // Фрагмент — не договор целиком. Без этой оговорки модель справедливо
+      // жалуется на отсутствие всех прочих условий, и любой отрицательный пример
+      // превращается в замечание: измерялась бы неполнота примера, а не правило.
+      const excerpt = 'ПРОВЕРКА ОТДЕЛЬНОГО УСЛОВИЯ. Тебе передан ФРАГМЕНТ договора, а не полный комплект. Отсутствие любых условий за пределами фрагмента не является замечанием и не отражается в findings: считай, что они согласованы в другой части договора. Оценивай только то, что прямо написано во фрагменте. Правила, к которым фрагмент не относится, помечай not_applicable.';
+      child.stdin.end(`${sharedInstruction}\n${excerpt}\n${analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(snapshot)}`);
       child.on('error', () => fail(new Error('Codex CLI недоступен: ' + binary)));
       child.on('close', code => {
         if (code !== 0) return fail(new Error(errorText.trim().split('\n').at(-1) || 'Codex завершился с ошибкой.'));
@@ -60,9 +64,11 @@ for (const name of files) {
     try {
       const { result, usage, ms } = await ask(item.text, profiles.custis);
       const fired = result.findings.some(f => f.rule === fixture.rule);
-      verdict = fired ? 'finding' : 'no_finding';
+      const others = [...new Set(result.findings.filter(f => f.rule !== fixture.rule).map(f => f.rule))];
+      verdict = fired ? 'finding' : others.length ? `другое правило: ${others.join(', ')}` : 'no_finding';
       spent.input += usage?.input_tokens ?? 0; spent.output += usage?.output_tokens ?? 0; spent.ms += ms;
-      if (verdict !== item.expect) { mismatches++; note = fired ? result.findings.find(f => f.rule === fixture.rule).title : item.why; }
+      const matched = item.expect === 'finding' ? fired : !fired && !others.length;
+      if (!matched) { mismatches++; note = fired ? result.findings.find(f => f.rule === fixture.rule).title : (result.findings[0]?.title || item.why); }
     } catch (e) { verdict = 'ошибка'; note = e.message; mismatches++; }
     lines.push(`| ${fixture.rule} | ${index + 1}. ${item.text.slice(0, 60).replace(/\|/g,'/')}… | ${item.expect} | ${verdict} | ${note ? note.slice(0, 90) : '—'} |`);
     process.stdout.write(`${fixture.rule} ${index + 1}/${fixture.cases.length}: ожидание ${item.expect}, результат ${verdict}\n`);
