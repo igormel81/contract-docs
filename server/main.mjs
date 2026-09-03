@@ -11,6 +11,7 @@ import { profiles, rules, instructionVersion } from './rules.mjs';
 import { CodexRunner } from './codex.mjs';
 import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
+import { findingKey } from '../public/document-ui.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
@@ -48,11 +49,15 @@ export async function createApp(options = {}) {
   }
   const fileView = f => ({ ...f, extraction: parse(f.extraction) });
   const analysisView = a => ({ ...a, snapshot: undefined, primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
-  function originSources(origin,contract,user){
+  function originFinding(origin,contract,user){
     const split=origin.indexOf(':');if(split<1)throw new HttpError(400,'Некорректная ссылка на замечание.');
     const run=owned('analyses',origin.slice(0,split),user);if(run.contract_id!==contract)throw new HttpError(400,'Замечание относится к другому договору.');
     const finding=parse(run.review_result||run.primary_result)?.findings.find(f=>f.id===origin.slice(split+1));
     if(!finding)throw new HttpError(400,'Исходное замечание не найдено.');
+    return {run,finding};
+  }
+  function originSources(origin,contract,user){
+    const {run,finding}=originFinding(origin,contract,user);
     const snapshot=parse(run.snapshot);
     return finding.sources.map(s=>{
       const ref=sourceRecord(s,snapshot.documents,{analysisId:run.id,revisionId:run.revision_id,revisionNumber:snapshot.version});
@@ -170,7 +175,7 @@ export async function createApp(options = {}) {
       const key = id(); db.prepare('INSERT INTO contracts(id,user_id,customer_id,title,contractor,kind,created) VALUES(?,?,?,?,?,?,?)').run(key,user.id,customer,required(input.title,200),choice(input.contractor,Object.keys(profiles)),kind,now());
       audit(db,user.id,key,kind === 'template' ? 'Создан шаблон' : 'Создан договор'); return send(res,201,{id:key});
     }
-    let match = path.match(/^\/docs\/api\/contracts\/([\w-]+)(?:\/(files|revisions|analyses|risks|effective|compare))?$/);
+    let match = path.match(/^\/docs\/api\/contracts\/([\w-]+)(?:\/(files|revisions|analyses|risks|effective|compare|dismissed))?$/);
     if (match) {
       const contract = owned('contracts',match[1],user.id), action = match[2];
       if (!action && req.method === 'GET') return send(res,200,{
@@ -180,6 +185,7 @@ export async function createApp(options = {}) {
         analyses: db.prepare('SELECT * FROM analyses WHERE contract_id=? ORDER BY created DESC').all(contract.id).map(analysisView),
         recommendations: db.prepare('SELECT r.* FROM recommendations r JOIN analyses a ON a.id=r.analysis_id WHERE a.contract_id=?').all(contract.id),
         risks: db.prepare('SELECT * FROM risks WHERE contract_id=? ORDER BY created DESC').all(contract.id).map(r=>({...r,sources:riskSources(r,user.id),events:db.prepare('SELECT * FROM risk_events WHERE risk_id=? ORDER BY created DESC').all(r.id)})),
+        dismissed: db.prepare('SELECT key,rule,title,reason,created FROM dismissed_findings WHERE contract_id=? ORDER BY created DESC').all(contract.id),
         history: db.prepare('SELECT action,detail,created FROM audit WHERE contract_id=? ORDER BY created DESC LIMIT 200').all(contract.id)
       });
       if (!action && req.method === 'PATCH') {
@@ -244,10 +250,24 @@ export async function createApp(options = {}) {
         const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),now(),now());
         audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}`); return send(res,202,{id:key});
       }
+      if (action === 'dismissed' && req.method === 'POST') {
+        if (contract.kind==='template') throw new HttpError(400,'Кандидаты в риски есть только у реальных договоров.');
+        const input=await jsonBody(req); const key=required(String(input.key||''),400);
+        if (input.restore) {
+          const removed=db.prepare('DELETE FROM dismissed_findings WHERE contract_id=? AND key=?').run(contract.id,key);
+          if(removed.changes) audit(db,user.id,contract.id,'Кандидат в риски возвращён',key);
+          return send(res,200,{ok:true});
+        }
+        const rule=required(String(input.rule||''),40), title=required(String(input.title||''),200), reason=required(input.reason,1000);
+        db.prepare('INSERT INTO dismissed_findings VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(contract_id,key) DO UPDATE SET reason=excluded.reason,created=excluded.created').run(id(),contract.id,user.id,key,rule,title,reason,now());
+        audit(db,user.id,contract.id,'Замечание отклонено как кандидат в риски',`${title}: ${reason}`);
+        return send(res,201,{ok:true});
+      }
       if (action === 'risks' && req.method === 'POST') {
         if (contract.kind==='template') throw new HttpError(400,'Реестр рисков ведётся по реальному договору, не по шаблону.');
         const input=await jsonBody(req); const key=id();
         const origin=String(input.origin||'').slice(0,300);
+        const candidate=origin?findingKey(originFinding(origin,contract.id,user.id).finding):null;
         let references=origin?originSources(origin,contract.id,user.id):[];
         if(!origin&&input.source){
           const {fileId,blockId,revisionId}=input.source,rev=revision(required(revisionId),contract.id);
@@ -259,7 +279,7 @@ export async function createApp(options = {}) {
           references=[{...ref,block}];
         }
         tx(db,()=>{
-          db.prepare('INSERT INTO risks VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,contract.id,required(input.title,200),choice(input.severity,['high','medium','low']),'Открыт',required(input.owner,100),required(input.detail,5000),origin,now(),now());
+          db.prepare('INSERT INTO risks(id,contract_id,title,severity,status,owner,detail,origin,finding_key,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(key,contract.id,required(input.title,200),choice(input.severity,['high','medium','low']),'Открыт',required(input.owner,100),required(input.detail,5000),origin,candidate,now(),now());
           references.forEach((reference,position)=>db.prepare('INSERT INTO risk_sources VALUES(?,?,?)').run(key,position,JSON.stringify(reference)));
         });
         audit(db,user.id,contract.id,'Зарегистрирован риск',input.title); return send(res,201,{id:key});

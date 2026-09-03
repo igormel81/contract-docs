@@ -20,10 +20,16 @@ export function database(dir) {
     CREATE TABLE IF NOT EXISTS risks(id TEXT PRIMARY KEY, contract_id TEXT REFERENCES contracts(id), title TEXT NOT NULL, severity TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL, detail TEXT NOT NULL, origin TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS risk_sources(risk_id TEXT NOT NULL REFERENCES risks(id), position INTEGER NOT NULL, reference TEXT NOT NULL, PRIMARY KEY(risk_id,position));
     CREATE TABLE IF NOT EXISTS risk_events(id TEXT PRIMARY KEY, risk_id TEXT REFERENCES risks(id), kind TEXT NOT NULL, text TEXT NOT NULL, due TEXT, state TEXT NOT NULL, created TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS dismissed_findings(id TEXT PRIMARY KEY, contract_id TEXT REFERENCES contracts(id), user_id TEXT REFERENCES users(id), key TEXT NOT NULL, rule TEXT NOT NULL, title TEXT NOT NULL, reason TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(contract_id,key));
     CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), contract_id TEXT, action TEXT NOT NULL, detail TEXT NOT NULL, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS throttle(key TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER NOT NULL);
   `);
+  for (const [table, name, decl] of [['risks','finding_key','TEXT']]) addColumn(db, table, name, decl);
   return db;
+}
+// Additive migration: existing rows keep NULL, old data is never rewritten.
+function addColumn(db, table, name, decl) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${decl}`);
 }
 export function tx(db, fn) {
   db.exec('BEGIN IMMEDIATE');

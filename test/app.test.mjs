@@ -8,6 +8,7 @@ import { createApp } from '../server/main.mjs';
 import { format, similarity } from '../server/documents.mjs';
 import { validateResult } from '../server/schema.mjs';
 import { rules } from '../server/rules.mjs';
+import { findingKey } from '../public/document-ui.js';
 import { fileURLToPath } from 'node:url';
 
 export function docx(text='Договор. Предмет: внедрение системы. Срок: 30 дней после аванса.') {
@@ -81,6 +82,15 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/analyses/'+run.id+'/documents',undefined,a.cookie)).data[0].id,file);
   const manualRisk=await request('/contracts/'+c+'/risks',{title:'Ручная ссылка',severity:'medium',owner:'Игорь',detail:'Пункт выбран вручную.',source:{fileId:file,blockId:linked.sources[0].blockId,revisionId:rev.data.id}},a.cookie);assert.equal(manualRisk.status,201);
   assert.equal((await request('/contracts/'+c+'/risks',{title:'Подмена',severity:'medium',owner:'Игорь',detail:'Проверка',source:{fileId:file,blockId:'invented',revisionId:rev.data.id}},a.cookie)).status,400);
+  assert.ok(linked.finding_key,'A risk created from a finding remembers the stable candidate key');
+  const candidate=findingKey(run.review_result.findings[0]);
+  assert.equal(linked.finding_key,candidate,'Server and interface derive the same key from the stored finding');
+  assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,rule:'LOC-01',title:'Тестовый риск места работ'},a.cookie)).status,400,'Dismissal requires a reason');
+  assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,rule:'LOC-01',title:'Тестовый риск места работ',reason:'Условие согласовано отдельно.'},b.cookie)).status,404,'Candidates follow contract access');
+  assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,rule:'LOC-01',title:'Тестовый риск места работ',reason:'Условие согласовано отдельно.'},a.cookie)).status,201);
+  assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed[0].key,candidate);
+  assert.equal((await request('/contracts/'+c+'/dismissed',{key:candidate,restore:true},a.cookie)).status,200);
+  assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.dismissed.length,0,'Dismissal is reversible');
   const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:'custis',kind:'template'},b.cookie);assert.equal(contractB.status,201);
   const wrongContract=await request('/contracts',{title:'Другой договор',contractor:'custis',customer_id:customer.data.id},a.cookie);
   assert.equal((await request('/contracts/'+wrongContract.data.id+'/risks',{title:'Чужой пункт',severity:'medium',owner:'Игорь',detail:'Проверка',origin:run.id+':test-finding'},a.cookie)).status,400);

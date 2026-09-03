@@ -5,6 +5,12 @@ export function locationLabel(block) {
   const page=block?.page?`, стр. ${block.page}${block.pageEnd&&block.pageEnd!==block.page?'-'+block.pageEnd:''}`:'';
   return section+label+page;
 }
+// Stable across analysis runs and revisions: finding.id is unique to one run only.
+// Used to hide candidates already registered as risks or explicitly dismissed.
+export function findingKey(finding) {
+  const norm=value=>String(value??'').replace(/\s+/g,' ').trim().toLowerCase();
+  return [finding.rule,norm(finding.title).slice(0,120),norm(finding.sources?.find(s=>s.quote)?.quote||'').slice(0,160)].join('|');
+}
 export function sourceLabel(source,files=[]) {
   const file=files.find(f=>f.id===source.fileId),block=(file?.extraction?.blocks||file?.blocks)?.find(b=>b.id===source.blockId);
   return `${source.fileName||file?.name||'Документ'}: ${source.location||locationLabel(block)}`;
