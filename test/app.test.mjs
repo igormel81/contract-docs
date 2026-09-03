@@ -80,6 +80,7 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/codex/login',{},b.cookie)).status,403);
   assert.equal((await request('/codex/logout',{confirm:'disconnect-application'},b.cookie)).status,403);
   const job=await request('/contracts/'+c+'/analyses',{revision_id:rev.data.id},a.cookie);assert.equal(job.status,202);
+  assert.match(job.data.note,/ИНН выбранного подрядчика в тексте не найден/,'A contractor that never appears in the text is flagged, not silently analysed');
   await app.runner.tick();let checked=await request('/contracts/'+c,undefined,a.cookie);const run=checked.data.analyses[0];
   assert.equal(run.status,'complete');assert.ok(run.primary_result&&run.review_result);assert.notEqual(run.primary_result.execution.session,run.review_result.execution.session);
   const linkedRisk=await request('/contracts/'+c+'/risks',{title:'Риск с источником',severity:'medium',owner:'Игорь',detail:'Проверка неизменяемой ссылки.',origin:run.id+':test-finding'},a.cookie);assert.equal(linkedRisk.status,201);

@@ -224,7 +224,7 @@ document.addEventListener('click',async event=>{
     if(action==='compare-filter')state.compareOnlyChanged=state.compareOnlyChanged===false;
     if(action==='effective')state.form={type:'effective',id:value};
     if(action==='stage')state.form={type:'stage'};
-    if(action==='analyze'){await api('/contracts/'+state.contractId+'/analyses',{revision_id:state.revisionId});state.source=null;state.sourceDocuments=null;state.runId=null;state.right='analysis';await refreshContract();notice('Комплект поставлен в очередь анализа.');}
+    if(action==='analyze'){const started=await api('/contracts/'+state.contractId+'/analyses',{revision_id:state.revisionId});state.source=null;state.sourceDocuments=null;state.runId=null;state.right='analysis';await refreshContract();notice(started.note?'Комплект в очереди. '+started.note:'Комплект поставлен в очередь анализа.');}
     if(action==='retry-analysis'){await api('/analyses/'+value+'/retry',{});await refreshContract();state.source=null;state.sourceDocuments=null;state.runId=state.contract.analyses[0].id;notice('Создана новая попытка. История сохранена.');}
     if(action==='cancel-analysis'){await api('/analyses/'+value+'/cancel',{});await refreshContract();}
     if(action==='run'){state.source=null;state.sourceDocuments=null;state.runId=value;state.right='analysis';}

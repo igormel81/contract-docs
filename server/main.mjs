@@ -252,9 +252,16 @@ export async function createApp(options = {}) {
         if (files.some(f=>f.status!=='ready')) throw new HttpError(409,'В комплекте есть непрочитанные файлы. Исправьте их или явно исключите из новой редакции.');
         const documents=files.map(f=>({id:f.id,name:f.name,hash:f.hash,...parse(f.extraction)}));
         if (JSON.stringify(documents).length>360000) throw new HttpError(413,'Комплект слишком велик для пилота (360 000 символов). Анализ не запущен.');
-        const snapshot={revisionId:rev.id,version:rev.number,kind:contract.kind,profile:profiles[contract.contractor],rules,instructionVersion,documents,created:now()};
+        // Подрядчика выбирают руками, и ошибка в списке разворачивает весь анализ не в ту
+        // сторону. Проверяем по ИНН: это подсказка человеку и модели, а не запрет.
+        const plain=documents.flatMap(f=>f.blocks.map(b=>b.text)).join(' ').replace(/[^0-9]+/g,' ');
+        const mine=profiles[contract.contractor].inn, other=Object.values(profiles).map(p=>p.inn).filter(inn=>inn!==mine);
+        const sideNote=plain.includes(mine)?null:other.find(inn=>plain.includes(inn))
+          ?'ИНН выбранного подрядчика в тексте не найден, зато найден ИНН другого профиля. Проверьте, та ли сторона выбрана; вывод об интересах стороны сделай с этой оговоркой.'
+          :'ИНН выбранного подрядчика в тексте не найден. Возможно, реквизиты не извлеклись или выбрана не та сторона: отрази это в ограничениях.';
+        const snapshot={revisionId:rev.id,version:rev.number,kind:contract.kind,profile:profiles[contract.contractor],contractorNote:sideNote,rules,instructionVersion,documents,created:now()};
         const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),now(),now());
-        audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}`); return send(res,202,{id:key});
+        audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}${sideNote?'; '+sideNote:''}`); return send(res,202,{id:key,note:sideNote});
       }
       if (action === 'dismissed' && req.method === 'POST') {
         if (contract.kind==='template') throw new HttpError(400,'Кандидаты в риски есть только у реальных договоров.');
