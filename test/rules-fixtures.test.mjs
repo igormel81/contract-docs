@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { rules } from '../server/rules.mjs';
 // Structure only. Whether a rule actually fires is checked by npm run rules:eval
 // against the real model; the suite itself stays deterministic and offline.
+//
+// Урок трёх прогонов: отрицательный пример обязан быть безупречен во всём, кроме
+// проверяемого антипаттерна. Неназванный объект права, срок без стороны, ссылка на
+// перечень за пределами фрагмента — модель поднимает их справедливо, и пример
+// начинает проверять собственную неполноту вместо правила.
 const dir = fileURLToPath(new URL('./rules/', import.meta.url));
 test('every rule in coverage has fixtures with a case that must not raise a finding', async () => {
   const files = (await readdir(dir)).filter(name => name.endsWith('.json'));
