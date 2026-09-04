@@ -19,7 +19,9 @@ try{
     const bytes=execFileSync('python3',['-c',`import io,zipfile,sys
 b=io.BytesIO()
 with zipfile.ZipFile(b,'w') as z:
- z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'+sys.argv[1]+'</w:t></w:r></w:p></w:body></w:document>')
+ table='<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Этап</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Срок</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+ nested='<w:p><w:r><w:t>6.2.1. Работы на площадке заказчика согласуются заранее.</w:t></w:r></w:p>'
+ z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'+sys.argv[1]+'</w:t></w:r></w:p>'+nested+table+'</w:body></w:document>')
 sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),bytes);
   }
   browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN,headless:true});
@@ -118,6 +120,12 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.waitForSelector('aside .source-block.highlight');
   assert.ok(await page.$('section.panel .analysis-result'),'Section stays put when a clause opens beside it');
   assert.match(await page.$eval('aside .source-block.highlight',el=>el.textContent),/6.2/);
+  // Документ показывается со своей структурой: отступы, заголовки, таблицы.
+  await page.click('[data-action=tab][data-value=document]');
+  await page.waitForSelector('section.panel .contract-text');
+  assert.ok(await page.$('section.panel .clause-table'),'A table is shown as a table, not as cells joined by pipes');
+  assert.ok(await page.$$eval('section.panel .source-block',els=>els.some(el=>(el.getAttribute('style')||'').match(/--indent:[1-9]/))),'Nested clauses carry their level');
+  await page.screenshot({path:join(screenshotDir,'center-structure-1440.png'),fullPage:true});
   // В разделе «Документ» спутник показывает замечания по этому документу.
   await page.click('[data-action=tab][data-value=document]');
   await page.waitForSelector('aside .analysis-result');

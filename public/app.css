@@ -30,3 +30,8 @@ a.compact-action:hover{background:var(--accent-bg)}
 @media(max-width:900px){.sidebar .row button{white-space:nowrap}}
 .warning .row,.error .row,.info .row{margin-top:8px}
 @media(max-width:1100px){.tabs{flex-wrap:wrap;overflow-x:visible}.tabs button{padding:9px 8px}}
+.contract-text .source-block{padding-left:calc(var(--indent,0) * 20px)}
+.contract-text .clause-heading{font-weight:650;font-size:15px;padding-top:18px}
+.clause-table{width:100%;border-collapse:collapse;font-size:13px;white-space:normal}
+.clause-table td{border:1px solid var(--line);padding:6px 8px;vertical-align:top}
+.clause-table-block{padding-left:0;overflow-x:auto}

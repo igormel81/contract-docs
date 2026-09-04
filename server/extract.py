@@ -177,7 +177,16 @@ def structure(paragraphs):
             if item.get('page'):
                 previous['pageEnd'] = item['page']
             continue
-        units.append({'id':'b'+str(len(units)+1),'text':text,'page':item.get('page'),'pageEnd':item.get('page'),'part':item.get('part','body'),'locator':locator})
+        # Нумерация бывает и ручной: тогда глубину даёт сам номер, а не список Word.
+        depth = min(locator['number'].count('.'),4) if locator.get('number') and locator['kind']=='clause' else 0
+        level = max(item.get('level') or 0, depth)
+        unit = {'id':'b'+str(len(units)+1),'text':text,'page':item.get('page'),'pageEnd':item.get('page'),'part':item.get('part','body'),
+                'level':level,'locator':locator}
+        if item.get('bold'):
+            unit['bold'] = True
+        if item.get('cells'):
+            unit['cells'] = item['cells']
+        units.append(unit)
     return units
 
 
@@ -209,7 +218,15 @@ def docx_paragraphs(archive):
         def paragraph(p):
             prefix,heading,uncertain,numbered = numbering.prefix(p)
             text = ''.join((el.text or '') if el.tag in (W+'t',W+'delText') else '\t' if el.tag==W+'tab' else '\n' if el.tag in (W+'br',W+'cr') else '' for el in p.iter())
-            return {'text':(prefix+' ' if prefix else '')+text,'heading':heading,'uncertain':uncertain,'numbering':prefix if numbered else None,'part':name}
+            props,_ = numbering.properties(p)
+            try:
+                level = int(props.get('numPr/ilvl') or (props.get('outlineLvl') if heading else 0) or 0)
+            except ValueError:
+                level = 0
+            runs = [r for r in p.findall(W+'r') if any((el.text or '').strip() for el in r.iter(W+'t'))]
+            bold = bool(runs) and all(r.find(W+'rPr/'+W+'b') is not None for r in runs)
+            return {'text':(prefix+' ' if prefix else '')+text,'heading':heading,'uncertain':uncertain,'numbering':prefix if numbered else None,
+                    'level':min(level,4),'bold':bold,'part':name}
         def walk(node):
             if node.tag == W+'p':
                 item = paragraph(node)
@@ -219,11 +236,12 @@ def docx_paragraphs(archive):
                 else:
                     yield item
             elif node.tag == W+'tbl':
-                rows = []
+                rows, grid = [], []
                 for row in node.findall(W+'tr'):
                     cells = ['\n'.join(paragraph(p)['text'] for p in cell.iter(W+'p')) for cell in row.findall(W+'tc')]
+                    grid.append(cells)
                     rows.append(' | '.join(cells))
-                yield {'text':'\n'.join(rows),'table':True,'part':name}
+                yield {'text':'\n'.join(rows),'table':True,'cells':grid,'part':name}
                 warnings.append('Таблицы представлены строками и ячейками; объединённые ячейки проверьте по оригиналу.')
             else:
                 for child in node:
@@ -264,7 +282,7 @@ def main(path, ext):
         raise ValueError('Не удалось извлечь текст. Для сканов требуется OCR; анализ недоступен.')
     if sum(len(x['text']) for x in blocks)>240000 or len(blocks)>4000:
         raise ValueError('Документ превышает лимит пилота: 240 000 символов / 4000 элементов структуры. Текст не обрезан; анализ не выполнен.')
-    return {'blocks':blocks,'warnings':sorted(set(warnings)),'extractor':'clauses-v2'}
+    return {'blocks':blocks,'warnings':sorted(set(warnings)),'extractor':'structure-v3'}
 
 
 if __name__ == '__main__':
@@ -272,5 +290,5 @@ if __name__ == '__main__':
         print(json.dumps(main(*sys.argv[1:3]),ensure_ascii=False))
     except Exception as exc:
         message = str(exc) if isinstance(exc,ValueError) else 'Не удалось прочитать документ: повреждён, защищён паролем или формат не поддерживается.'
-        print(json.dumps({'blocks':[],'warnings':[message],'extractor':'clauses-v2'},ensure_ascii=False))
+        print(json.dumps({'blocks':[],'warnings':[message],'extractor':'structure-v3'},ensure_ascii=False))
         sys.exit(1)

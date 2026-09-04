@@ -87,5 +87,16 @@ class Extraction(unittest.TestCase):
         items=document(paragraph('1. Условия')+table+paragraph('2. Оплата'))
         self.assertEqual(items[1]['text'],'Срок | 10 дней')
         self.assertEqual(items[1]['locator']['kind'],'table')
+        self.assertEqual(items[1]['cells'],[['Срок','10 дней']])
+
+    def test_structure_carries_nesting_and_emphasis(self):
+        items=document(''.join([paragraph('Предмет',0),paragraph('Внедрение системы',1)]),NUMBERING)
+        self.assertEqual([p['level'] for p in items],[0,1])
+        bold='<w:p><w:pPr/><w:r><w:rPr><w:b/></w:rPr><w:t>ВАЖНОЕ УСЛОВИЕ ДОГОВОРА</w:t></w:r></w:p>'
+        items=document(bold+paragraph('Обычный абзац договора без выделения'))
+        self.assertTrue(items[0].get('bold'))
+        self.assertFalse(items[1].get('bold'))
+        # Текст не меняется: по нему сверяются цитаты.
+        self.assertEqual(items[0]['text'],'ВАЖНОЕ УСЛОВИЕ ДОГОВОРА')
 
 unittest.main()

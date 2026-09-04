@@ -23,9 +23,19 @@ export function sourceLabel(source,files=[]) {
 export function documentText(file,selected,esc,prefix='source-') {
   return `<div class="document contract-text">${(file.extraction?.blocks||file.blocks||[]).map(block=>{
     const active=selected?.blockId===block.id;
-    let text=esc(block.text);
-    if(active&&selected.quote&&block.text.includes(selected.quote))text=text.replace(esc(selected.quote),'<mark>'+esc(selected.quote)+'</mark>');
-    return `<section class="source-block ${active?'highlight':''} ${block.locator?.kind==='section'?'clause-heading':''}" id="${prefix+esc(block.id)}">${active?`<small>${esc(locationLabel(block))}</small>`:''}${text}</section>`;
+    // Структура документа: вложенность списков, заголовки, таблицы и сплошное
+    // выделение абзаца. Текст пункта при этом остаётся тем же, по которому
+    // сверяются цитаты, — иначе подсветка перестанет совпадать с источником.
+    let body;
+    if(block.cells?.length){
+      body=`<table class="clause-table"><tbody>${block.cells.map(row=>`<tr>${row.map(cell=>`<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    }else{
+      let text=esc(block.text);
+      if(active&&selected.quote&&block.text.includes(selected.quote))text=text.replace(esc(selected.quote),'<mark>'+esc(selected.quote)+'</mark>');
+      body=block.bold?`<strong>${text}</strong>`:text;
+    }
+    const kind=block.locator?.kind;
+    return `<section class="source-block ${active?'highlight':''} ${kind==='section'?'clause-heading':''} ${kind==='table'?'clause-table-block':''}" style="--indent:${Number(block.level)||0}" id="${prefix+esc(block.id)}">${active?`<small>${esc(locationLabel(block))}</small>`:''}${body}</section>`;
   }).join('')}</div>`;
 }
 export function compactPassport(result,esc,sources) {
