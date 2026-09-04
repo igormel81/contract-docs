@@ -23,6 +23,9 @@ test('every rule in coverage has fixtures with a case that must not raise a find
       // [параметр] — наша пометка для предлагаемых правок. В тексте договора это
       // читается как незаполненный срок, и любой отрицательный пример ломается.
       assert.ok(!item.text.includes('[параметр]'), `${name}: a contract fragment must not carry a proposal placeholder`);
+      // Склеенный текст — «в течение в течение» — модель справедливо считает дефектом
+      // условия, и отрицательный пример перестаёт проверять правило.
+      assert.doesNotMatch(item.text, /\b(\p{L}+\s+\p{L}+)\s+\1\b/iu, `${name}: a fragment must not repeat a phrase`);
       assert.ok(typeof item.why === 'string' && item.why.trim().length >= 10, `${name}: every case explains itself`);
       // Соседнее правило вместо целевого — не промах, если это заранее допущено.
       for (const neighbour of item.also || []) assert.ok(rules.some(r => r.id === neighbour), `${name}: also points at an existing rule`);
