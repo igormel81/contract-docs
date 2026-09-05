@@ -35,10 +35,26 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
     assert.doesNotMatch(copy,/Кастис|Модеус|ООО «ЗИС»/i);
   }
   await page.goto('http://127.0.0.1:3119/docs/',{waitUntil:'networkidle0'});
+  async function assertRepositoryLink(surface){
+    for(const width of [1440,768,375]){
+      await page.setViewport({width,height:900});
+      const selector='a[href="https://github.com/igormel81/contract-docs"]';
+      assert.equal(await page.$$eval(selector,els=>els.length),1);
+      await page.keyboard.press('Tab');
+      await page.focus(selector);
+      const link=await page.$eval(selector,el=>({target:el.target,rel:el.rel,label:el.getAttribute('aria-label'),height:el.getBoundingClientRect().height,focus:el.matches(':focus-visible'),outline:getComputedStyle(el).outlineStyle}));
+      assert.equal(link.target,'_blank');assert.match(link.rel,/noopener/);assert.match(link.rel,/noreferrer/);assert.match(link.label,/новая вкладка/);assert.ok(link.height>=44);assert.ok(link.focus);assert.notEqual(link.outline,'none');
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      await page.screenshot({path:join(screenshotDir,`repository-${surface}-${width}.png`),fullPage:true});
+    }
+    await page.setViewport({width:1440,height:900});
+  }
+  await assertRepositoryLink('login');
   await assertNeutralInterface();
   assert.equal(await page.$eval('meta[name=description]',el=>el.content),'Внутреннее рабочее место для договоров, редакций и рисков.');
   await page.click('[data-action=auth-mode]');await page.type('[name=login]','owner');await page.type('[name=password]','synthetic-ui-password');await page.click('[data-form=auth] [type=submit]');
   await page.waitForSelector('[data-action=quick-open]');
+  await assertRepositoryLink('workspace');
   await page.click('[data-action=quick-open]');await page.waitForSelector('[data-action=new-organization]');
   assert.equal(await page.$('#quick-file-picker'),null,'No upload before choosing organization');
   await page.click('[data-action=new-organization]');await page.type('[name=name]','Исполнитель А');

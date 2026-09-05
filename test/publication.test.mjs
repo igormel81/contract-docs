@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createApp} from '../server/main.mjs';
@@ -32,7 +32,11 @@ test('documents are public while application data and arbitrary source paths sta
     for(const path of ['/docs/api/bootstrap','/docs/api/legal-base','/docs/api/codex'])assert.equal((await fetch(base+path)).status,401);
     for(const path of ['/docs/downloads/auth.json','/docs/local-installation/server/main.mjs','/docs/downloads/%2e%2e%2fdata/contracts.sqlite','/docs/local-installation/__proto__'])assert.equal((await fetch(base+path)).status,404);
     assert.equal((await fetch(base+'/docs/local-installation/architecture.html',{method:'POST'})).status,404);
-    assert.match(await readFile(new URL('../public/app.js',import.meta.url),'utf8'),/Локальная установка/);
+    const application=await (await fetch(base+'/docs/app.js')).text();
+    assert.match(application,/Локальная установка/);
+    const repositoryLink=/href="https:\/\/github\.com\/igormel81\/contract-docs" target="_blank" rel="noopener noreferrer" aria-label="Код на GitHub \(новая вкладка\)">Код на GitHub<\/a>/g;
+    assert.equal([...application.matchAll(repositoryLink)].length,2,'Repository is linked before and after login');
+    assert.match(await (await fetch(base+'/docs/local-installation/')).text(),repositoryLink);
     const architecture=await (await fetch(base+'/docs/local-installation/architecture.html')).text();
     assert.match(architecture,/128 ГБ RAM/);
     assert.match(architecture,/Qwen\/Qwen3\.5-27B/);
