@@ -1,13 +1,113 @@
 """Bounded extraction preserving source clauses. Runs in a no-network sandbox."""
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 warnings = []
+
+# Installation-controlled opt-in only: no package, language, URL or model download.
+# Exceeding a limit rejects extraction; scanned pages are never silently skipped.
+OCR_MAX_PAGES = 10
+OCR_MAX_PDF_PAGES = 200
+OCR_TOTAL_SECONDS = 110
+OCR_COMMAND_SECONDS = 25
+OCR_IMAGE_SIDE = 3200
+OCR_FILE_BYTES = 16 * 1024 * 1024
+OCR_TEXT_BYTES = 4 * 1024 * 1024
+
+
+def ocr_child_limits():
+    # The surrounding Linux sandbox/cgroup remains the security boundary.
+    # These inherited process limits also bound scratch files and local test runs.
+    import resource
+    resource.setrlimit(resource.RLIMIT_FSIZE, (OCR_FILE_BYTES, OCR_FILE_BYTES))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if sys.platform.startswith('linux'):
+        resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+
+
+def ocr_command(args, directory, deadline, output_limit=OCR_TEXT_BYTES):
+    remaining = min(OCR_COMMAND_SECONDS, deadline - time.monotonic())
+    if remaining <= 0:
+        raise ValueError('OCR: превышен общий лимит времени. Текст не обрезан; извлечение не выполнено.')
+    # Redirect output to bounded scratch files instead of accumulating arbitrary
+    # subprocess stdout/stderr in Python memory. Never expose tool stderr/content.
+    with tempfile.TemporaryFile(dir=directory) as output:
+        process = None
+        try:
+            process = subprocess.Popen(args, stdout=output, stderr=subprocess.DEVNULL,
+                                       start_new_session=True, preexec_fn=ocr_child_limits,
+                                       env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+                                            'LANG': 'C.UTF-8', 'OMP_THREAD_LIMIT': '1', 'TMPDIR': directory})
+            try:
+                code = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                raise ValueError('OCR: превышено время обработки страницы. Проверьте исходник; извлечение не выполнено.') from None
+            if code:
+                raise ValueError('OCR: локальный инструмент %s не завершил обработку. Проверьте файл и установленную версию; извлечение не выполнено.' % args[0])
+            if output.tell() > output_limit:
+                raise ValueError('OCR: превышен безопасный размер вывода. Текст не обрезан; извлечение не выполнено.')
+            output.seek(0)
+            return output.read(output_limit + 1).decode('utf-8')
+        except FileNotFoundError:
+            raise ValueError('OCR включён, но локальный инструмент %s не установлен. Администратор должен заранее установить Poppler, Tesseract и языки rus+eng; автоматическая загрузка отключена.' % args[0]) from None
+        finally:
+            if process:
+                # Stop the whole command group, including any surviving children.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+
+
+def pdf_with_ocr(path):
+    deadline = time.monotonic() + OCR_TOTAL_SECONDS
+    with tempfile.TemporaryDirectory(prefix='docs-ocr-') as scratch:
+        text = ocr_command(['pdftotext', '-layout', '-enc', 'UTF-8', path, '-'], scratch, deadline)
+        pages = text.split('\f')
+        if pages and not pages[-1].strip():
+            pages.pop()
+        if not pages:
+            raise ValueError('PDF: страницы не найдены. Проверьте исходный файл.')
+        scans = [page for page, value in enumerate(pages, 1) if not value.strip()]
+        if len(pages) > OCR_MAX_PDF_PAGES or len(scans) > OCR_MAX_PAGES:
+            raise ValueError('OCR: лимит пилота — %s страниц PDF и %s страниц без текстового слоя. В файле %s / %s соответственно. Страницы не пропущены; извлечение не выполнено.' % (OCR_MAX_PDF_PAGES, OCR_MAX_PAGES, len(pages), len(scans)))
+        if scans:
+            languages = {line.strip() for line in ocr_command(['tesseract', '--list-langs'], scratch, deadline).splitlines()}
+            if not {'rus', 'eng'}.issubset(languages):
+                raise ValueError('OCR включён, но локальные языки Tesseract rus+eng недоступны. Администратор должен установить оба языковых пакета заранее; автоматическая загрузка отключена.')
+        paragraphs = []
+        for page, text in enumerate(pages, 1):
+            recognized = page in scans
+            if recognized:
+                prefix = os.path.join(scratch, 'page-%s' % page)
+                ocr_command(['pdftoppm', '-f', str(page), '-l', str(page), '-singlefile',
+                             '-gray', '-r', '200', '-scale-to', str(OCR_IMAGE_SIDE), path, prefix], scratch, deadline)
+                raster = prefix + '.pgm'
+                if not os.path.isfile(raster) or os.path.islink(raster) or os.path.getsize(raster) > OCR_FILE_BYTES:
+                    raise ValueError('OCR: растровая страница отсутствует или превышает безопасный размер. Извлечение не выполнено.')
+                try:
+                    text = ocr_command(['tesseract', raster, 'stdout', '-l', 'rus+eng', '--psm', '3'], scratch, deadline)
+                finally:
+                    os.unlink(raster)
+                if not text.strip():
+                    raise ValueError('Страница %s: OCR не обнаружил текст. Проверьте, пуста ли страница или неразборчив скан; извлечение не выполнено.' % page)
+                warnings.append('Страница %s: машинное распознавание OCR (Tesseract, rus+eng). Вручную проверьте номера пунктов, суммы, даты и полноту по оригиналу; структура таблиц и расположение колонок не гарантируются.' % page)
+            for item in text_paragraphs(text, page):
+                if recognized:
+                    item['ocr'] = True
+                paragraphs.append(item)
+        return paragraphs, {'enabled': True, 'engine': 'tesseract', 'languages': ['rus', 'eng'],
+                            'pages': scans, 'reviewRequired': bool(scans), 'originalModified': False}
 
 
 def val(node, path, default=None):
@@ -176,6 +276,9 @@ def structure(paragraphs):
             previous['text'] += '\n\n'+text
             if item.get('page'):
                 previous['pageEnd'] = item['page']
+            if item.get('ocr'):
+                previous['ocrPages'] = sorted(set(previous.get('ocrPages', []) + [item['page']]))
+                previous['locator']['reviewRequired'] = True
             continue
         # Нумерация бывает и ручной: тогда глубину даёт сам номер, а не список Word.
         depth = min(locator['number'].count('.'),4) if locator.get('number') and locator['kind']=='clause' else 0
@@ -186,6 +289,13 @@ def structure(paragraphs):
             unit['bold'] = True
         if item.get('cells'):
             unit['cells'] = item['cells']
+        if item.get('ocr'):
+            unit['ocrPages'] = [item['page']]
+            locator['reviewRequired'] = True
+            # Keep the existing locator contract: callers already treat uncertain
+            # numbers as quote/page references, not verified original numbering.
+            if found or heading:
+                locator['status'] = 'uncertain'
         units.append(unit)
     return units
 
@@ -249,7 +359,9 @@ def docx_paragraphs(archive):
         yield from walk(root)
 
 
-def main(path, ext):
+def main(path, ext, ocr=False):
+    warnings.clear()
+    ocr_metadata = None
     if ext == 'docx':
         with zipfile.ZipFile(path) as archive:
             entries = archive.infolist()
@@ -261,16 +373,26 @@ def main(path, ext):
                 raise ValueError('Документы с макросами или вложенными объектами не принимаются.')
             paragraphs = list(docx_paragraphs(archive))
     elif ext == 'pdf':
-        out = subprocess.run(['pdftotext','-layout','-enc','UTF-8',path,'-'],capture_output=True,timeout=25,check=True)
-        pages = out.stdout.decode('utf-8').split('\f')
-        if pages and not pages[-1].strip():
-            pages.pop()
-        paragraphs = []
-        for page,text in enumerate(pages,1):
-            if not text.strip():
-                warnings.append('Страница %s: нет текстового слоя. OCR пока не подключён.' % page)
-            paragraphs.extend(text_paragraphs(text,page))
-        warnings.append('PDF: нумерация взята из текстового слоя; порядок колонок и границы пунктов требуют проверки по оригиналу.')
+        if ocr:
+            def cancel_ocr(_signal, _frame):
+                raise ValueError('OCR отменён. Временные изображения удалены; извлечение не выполнено.')
+            previous_handler = signal.signal(signal.SIGTERM, cancel_ocr)
+            try:
+                paragraphs, ocr_metadata = pdf_with_ocr(path)
+            finally:
+                signal.signal(signal.SIGTERM, previous_handler)
+            warnings.append('PDF: порядок колонок и границы пунктов требуют проверки по оригиналу; OCR не изменяет исходный файл.')
+        else:
+            out = subprocess.run(['pdftotext','-layout','-enc','UTF-8',path,'-'],capture_output=True,timeout=25,check=True)
+            pages = out.stdout.decode('utf-8').split('\f')
+            if pages and not pages[-1].strip():
+                pages.pop()
+            paragraphs = []
+            for page,text in enumerate(pages,1):
+                if not text.strip():
+                    warnings.append('Страница %s: нет текстового слоя. OCR отключён в настройках извлечения.' % page)
+                paragraphs.extend(text_paragraphs(text,page))
+            warnings.append('PDF: нумерация взята из текстового слоя; порядок колонок и границы пунктов требуют проверки по оригиналу.')
     elif ext == 'doc':
         out = subprocess.run(['antiword','-m','UTF-8.txt',path],capture_output=True,timeout=25,check=True)
         paragraphs = list(text_paragraphs(out.stdout.decode('utf-8')))
@@ -282,12 +404,17 @@ def main(path, ext):
         raise ValueError('Не удалось извлечь текст. Для сканов требуется OCR; анализ недоступен.')
     if sum(len(x['text']) for x in blocks)>240000 or len(blocks)>4000:
         raise ValueError('Документ превышает лимит пилота: 240 000 символов / 4000 элементов структуры. Текст не обрезан; анализ не выполнен.')
-    return {'blocks':blocks,'warnings':sorted(set(warnings)),'extractor':'structure-v3'}
+    result = {'blocks':blocks,'warnings':sorted(set(warnings)),'extractor':'structure-v3'}
+    if ocr_metadata is not None:
+        result['ocr'] = ocr_metadata
+    return result
 
 
 if __name__ == '__main__':
     try:
-        print(json.dumps(main(*sys.argv[1:3]),ensure_ascii=False))
+        if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != '--ocr'):
+            raise ValueError('Параметры извлечения: файл, формат и необязательный флаг --ocr.')
+        print(json.dumps(main(*sys.argv[1:3], ocr=len(sys.argv) == 4),ensure_ascii=False))
     except Exception as exc:
         message = str(exc) if isinstance(exc,ValueError) else 'Не удалось прочитать документ: повреждён, защищён паролем или формат не поддерживается.'
         print(json.dumps({'blocks':[],'warnings':[message],'extractor':'structure-v3'},ensure_ascii=False))

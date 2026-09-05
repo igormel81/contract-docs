@@ -3,13 +3,12 @@ import { mkdir, readFile, writeFile, unlink, rm, readdir } from 'node:fs/promise
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { schema, reviewSchema, proposalSchema, validateResult, parseReview } from './schema.mjs';
-import { sharedInstruction, analystInstruction, reviewerInstruction, proposalInstruction } from './rules.mjs';
-import { organizationSchema, organizationInstruction, lookupResult } from './organizations.mjs';
+import { validateResult, parseReview } from './schema.mjs';
+import { lookupResult } from './organizations.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
-import { resultSources, leanResult } from './sources.mjs';
-import { legalInstruction, legalStatus } from './legal.mjs';
+import { resultSources } from './sources.mjs';
+import { analysisRequest, proposalRequest } from './model-request.mjs';
 
 const disabled = ['shell_tool','unified_exec','apps','plugins','remote_plugin','hooks','multi_agent','multi_agent_v2','browser_use','browser_use_external','computer_use','image_generation','view_image','workspace_dependencies','skill_search','code_mode_host','in_app_browser','in_app_local_automation','goals','sleep_tool'];
 async function stopChild(child) {
@@ -94,8 +93,8 @@ export class CodexRunner {
     }
     const lookup = stage === 'organization';
     const review = stage === 'review';
-    const base = primary ? leanResult(primary) : null;
-    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(lookup ? organizationSchema : review ? reviewSchema : schema), { mode: 0o600 });
+    const { prompt, schema: outputSchema, base } = analysisRequest(snapshot, stage, primary);
+    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(outputSchema), { mode: 0o600 });
     const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c',lookup ? 'web_search="live"' : 'web_search="disabled"'];
     for (const feature of disabled.filter(f=>!lookup||f!=='code_mode_host')) args.push('--disable', feature);
     if(lookup)args.push('--enable','code_mode_host');
@@ -104,10 +103,6 @@ export class CodexRunner {
     // Stable first, variable last: instructions, rules and profile repeat across every
     // run, the documents do not. Whether the provider caches that prefix is measured,
     // not assumed; the order costs nothing either way.
-    const { profile, rules: ruleSet, instructionVersion: setVersion, kind, ...material } = snapshot;
-    // Keep the frozen text and its edition; expiry can only lower confidence.
-    if (material.legal) material.legal = { ...material.legal, status: legalStatus(material.legal) };
-    const prompt = lookup ? `${organizationInstruction}\nДАННЫЕ ПОИСКА:\n${JSON.stringify({inn:snapshot.inn})}` : `${sharedInstruction}\n${legalInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
     const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
     const startedAt = Date.now();
@@ -172,7 +167,8 @@ export class CodexRunner {
       if (!(await this.status()).connected) throw new HttpError(409, 'Общий Codex не подключён.');
       await mkdir(cwd, { recursive: true, mode: 0o700 });
       const schemaPath = join(cwd, 'schema.json');
-      await writeFile(schemaPath, JSON.stringify(proposalSchema), { mode: 0o600 });
+      const requestInput = proposalRequest(request);
+      await writeFile(schemaPath, JSON.stringify(requestInput.schema), { mode: 0o600 });
       const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c','web_search="disabled"'];
       for (const feature of disabled) args.push('--disable', feature);
       args.push('-');
@@ -183,7 +179,7 @@ export class CodexRunner {
         const timer = setTimeout(() => void stopChild(child), 3 * 60000); timer.unref();
         child.stdout.on('data', chunk => { if (exceeded) return; output += chunk; if (output.length > 512 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
         child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-4000); });
-        child.stdin.on('error', () => {}); child.stdin.end(`${proposalInstruction}\n${legalInstruction}\nДАННЫЕ:\n${JSON.stringify(request)}`);
+        child.stdin.on('error', () => {}); child.stdin.end(requestInput.prompt);
         child.on('error', () => { clearTimeout(timer); reject(new HttpError(503, 'Исполнитель Codex недоступен.')); });
         child.on('close', code => {
           clearTimeout(timer);this.active=null;

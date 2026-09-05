@@ -39,6 +39,18 @@
 
 По этому плану локальные компоненты пока не выпущены. Статус задачи меняется на «принято» только после проверки её критериев; тесты с подставным сервером не заменяют испытания модели.
 
+## Module evidence (not an application release)
+
+Первая волна подготовила изолированные модули, но общий runner, переключатель режима и production-поставка ещё не подключены:
+
+| Область | Evidence | Граница |
+|---|---|---|
+| LOC-01/02/04 | `server/model-providers/local.mjs`, 28 synthetic tests; exact tokenizer preflight, context rejection, cancellation, schema validation and no fallback | Реальный vLLM/GPU не испытан; `generationProbed=false`, `revisionsAttested=false`; `server/local-runner.mjs` пока не включён в `main.mjs` |
+| LOC-05 | `server/extract.py` + `server/documents.mjs`, 9 OCR/extraction tests; OCR только opt-in, Linux+bubblewrap, original numbering preserved, timeout/cleanup | Русская модель Tesseract и реальный Linux namespace/cgroup gate не проверены; UI warning and admin option remain |
+| LOC-06 | `server/legal-packages.mjs`, 16 tests; signed package, hash/schema/date checks, immutable staging, explicit approval/activation, fail-closed corruption | API/UI/loader activation not connected; fixtures are synthetic and do not assert legal completeness |
+
+These results are implementation evidence for the next integration wave, not a claim that local installation is ready or that any module has been deployed.
+
 ## In flight
 
 | ID | Обязательная задача / первая поставка | Исполнитель | Зависимости | Приёмка |
@@ -111,3 +123,4 @@
 
 - 2026-09-05: уточнены LOC-01…04 — Codex по умолчанию сохраняется; локальные модели являются опцией общего подключения приложения. Добавлены критерии переключения, сохранения серверной авторизации и исключения данных владельца из Git/архива. Переключатель пока не реализован.
 - 2026-09-05: девять обязательных задач превращены в план с зависимостями, границами первой волны и воротами приёмки; три существующих агента получили задания. Локальная установка ещё не выпущена.
+- 2026-09-05: первая волна модулей получила независимые synthetic-проверки; доказательства и ограничения зафиксированы отдельно от статуса приложения. Интеграция runner, UI-переключателя и offline-поставки остаётся в очереди.
