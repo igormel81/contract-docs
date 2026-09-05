@@ -1,11 +1,13 @@
 import Ajv from 'ajv';
+import { validateLegalResult } from './legal.mjs';
 const string = { type: 'string', maxLength: 15000 };
 const obj = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 const arr = (items, maxItems = 100) => ({ type: 'array', items, maxItems });
 const source = obj({ fileId: string, blockId: string, quote: string });
+const legalSources = arr(obj({ normId: string, quote: string }), 10);
 const severity = { type: 'string', enum: ['high','medium','low'] };
 const passport = arr(obj({ key: { type: 'string', enum: ['subject','result','term','price','payment','location','acceptance','dependencies','special'] }, title: string, value: string, status: { type: 'string', enum: ['extracted','missing','uncertain'] }, sources: arr(source, 20) }), 9);
-const finding = obj({ id: string, rule: string, title: string, severity, description: string, sources: arr(source, 20), proposal: string, review: { type: 'string', enum: ['primary','confirmed','corrected','added'] } });
+const finding = obj({ id: string, rule: string, title: string, severity, description: string, sources: arr(source, 20), legalSources, proposal: string, review: { type: 'string', enum: ['primary','confirmed','corrected','added'] } });
 const coverage = arr(obj({ rule: string, status: { type: 'string', enum: ['checked','not_applicable','needs_data'] }, note: string }), 20);
 export const schema = obj({
   summary: string, passport, findings: arr(finding, 60), coverage,
@@ -17,7 +19,7 @@ export const schema = obj({
 export const reviewSchema = obj({
   summary: string, passport,
   verdicts: arr(obj({ id: string, verdict: { type: 'string', enum: ['confirmed','corrected','rejected'] }, reason: string,
-    title: string, description: string, severity: { type: 'string', enum: ['','high','medium','low'] }, proposal: string, sources: arr(source, 20) }), 60),
+    title: string, description: string, severity: { type: 'string', enum: ['','high','medium','low'] }, proposal: string, sources: arr(source, 20), legalSources }), 60),
   added: arr(finding, 20), coverage,
   limitations: arr(string, 30), changes: arr(string, 100)
 });
@@ -33,7 +35,7 @@ export function assembleReview(primary, delta) {
     if (item.verdict === 'confirmed') { findings.push({ ...base, review: 'confirmed' }); continue; }
     findings.push({ ...base, title: item.title || base.title, description: item.description || base.description,
       severity: item.severity || base.severity, proposal: item.proposal || base.proposal,
-      sources: item.sources.length ? item.sources : base.sources, review: 'corrected' });
+      sources: item.sources.length ? item.sources : base.sources, legalSources: item.legalSources ?? base.legalSources ?? [], review: 'corrected' });
     changes.push(`Исправлено ревьюером: ${item.title || base.title}. ${item.reason}`);
   }
   for (const item of delta.added) findings.push({ ...item, review: 'added' });
@@ -47,11 +49,15 @@ const ajv = new Ajv({ allErrors: true });
 const validate = ajv.compile(schema);
 const validateDelta = ajv.compile(reviewSchema);
 export function parseReview(primary, delta) {
+  // Legacy stored results and deterministic test doubles predate legalSources.
+  // The output schema itself remains strict: every declared property is required.
+  for (const item of [...(delta.verdicts || []), ...(delta.added || [])]) if (item.legalSources === undefined) item.legalSources = [];
   if (!validateDelta(delta)) throw new Error('Ответ ревьюера не соответствует структуре решений.');
   return assembleReview(primary, delta);
 }
 const normalized = value => value.replace(/\s+/g, ' ').trim();
 export function validateResult(result, snapshot, stage) {
+  for (const item of result.findings || []) if (item.legalSources === undefined) item.legalSources = [];
   if (!validate(result)) throw new Error('Ответ агента не соответствует структуре результата.');
   if (result.passport.length !== 9 || new Set(result.passport.map(x => x.key)).size !== 9) throw new Error('Паспорт неполон.');
   const covered = snapshot.rules.filter(r => r.coverage !== false);
@@ -67,7 +73,7 @@ export function validateResult(result, snapshot, stage) {
     if (item.rule && !snapshot.rules.some(r => r.id === item.rule)) throw new Error('Неизвестное правило.');
     if (item.review && (stage === 'primary' ? item.review !== 'primary' : item.review === 'primary')) throw new Error('Неверный статус ревью.');
   }
-  // A criterion that can never fire is not a check: the legal caveat is stated once, by the server.
-  if (!result.limitations.some(x => x.includes(legalLimitation.slice(0, 40)))) result.limitations.push(legalLimitation);
-  return result;
+  // Preserve the historical caveat only for runs without a corpus snapshot.
+  if (!snapshot.legal && !result.limitations.some(x => x.includes(legalLimitation.slice(0, 40)))) result.limitations.push(legalLimitation);
+  return validateLegalResult(result, snapshot);
 }

@@ -39,6 +39,10 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.equal(await page.$eval('meta[name=description]',el=>el.content),'Внутреннее рабочее место для договоров, редакций и рисков.');
   await page.click('[data-action=auth-mode]');await page.type('[name=login]','owner');await page.type('[name=password]','synthetic-ui-password');await page.click('[data-form=auth] [type=submit]');
   await page.waitForSelector('[data-action=quick-open]');await page.click('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
+  await page.setViewport({width:375,height:900});
+  assert.ok(await page.$eval('[data-action=quick-pick]',el=>el.getBoundingClientRect().bottom<innerHeight),'Mobile upload action fits the first screen');
+  assert.equal(await page.$eval('aside.inspector',el=>getComputedStyle(el).display),'none','No empty inspector takes upload space');
+  await page.setViewport({width:1440,height:900});
   await assertNeutralInterface();
   assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Кастис/);
   assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Модеус/);
@@ -65,6 +69,18 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('section.panel [data-action=quick-source]');
   await page.waitForSelector('aside .source-block.highlight');
   assert.ok(await page.$('section.panel .analysis-result'));
+  const narrowWidth=await page.$eval('.inspector',el=>el.getBoundingClientRect().width);
+  await page.click('[data-action=quick-source-width]');
+  assert.ok(await page.$eval('.inspector',el=>el.getBoundingClientRect().width)>narrowWidth,'Source pane width can be changed');
+  await page.setViewport({width:375,height:900});
+  await page.waitForFunction(()=>document.querySelector('.inspector').getAttribute('aria-modal')==='true');
+  assert.equal(await page.$eval('.inspector',el=>el.getAttribute('aria-modal')),'true');
+  await page.focus('[data-action=quick-source-close]');await page.keyboard.press('Escape');
+  await page.waitForFunction(()=>!document.body.classList.contains('source-modal-open'));
+  await page.waitForFunction(()=>document.activeElement?.dataset.action==='quick-source');
+  await page.click('section.panel [data-action=quick-source]');
+  assert.equal(await page.$eval('.inspector',el=>el.getAttribute('role')),'dialog');
+  await page.setViewport({width:1440,height:900});
   for(const width of [1440,768,375]){
     await page.setViewport({width,height:900});
     const size=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));
@@ -104,6 +120,9 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   const originalCount=app.db.prepare('SELECT count(*) n FROM analyses').get().n;
   await page.click('[data-action=tab][data-value=analysis]');
   await page.waitForSelector('section.panel [data-form=recommendation]');
+  assert.equal(await page.$eval('.finding-disclosure',el=>el.open),false,'Findings start as compact rows');
+  assert.equal(await page.$('.step-line'),null,'Completed stages no longer take a separate card row');
+  await page.click('.finding-disclosure>summary');
   await page.$eval('[data-form=recommendation] textarea',el=>{el.value='Уточнить оплату по п. 6.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.select('[data-form=recommendation] select','planned');
   // Черновик рекомендации переживает переключение разделов в одном меню.
@@ -136,6 +155,10 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2');
   await page.click('[data-form=recommendation] [type=submit]');
   await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('Решение сохранено'));
+  await page.click('[data-action=finding-filter][data-value=unresolved]');
+  assert.equal(await page.$$eval('section.panel .finding',els=>els.length),0,'Saved planned decisions leave the unresolved filter');
+  assert.equal(await page.$eval('[data-action=finding-filter][data-value=unresolved]',el=>el.getAttribute('aria-pressed')),'true');
+  await page.click('[data-action=finding-filter][data-value=all]');
   assert.equal(app.db.prepare('SELECT text FROM recommendations').get().text,'Уточнить оплату по п. 6.2');
   assert.equal(app.db.prepare('SELECT count(*) n FROM analyses').get().n,originalCount);
   assert.equal(await page.$eval('.analysis-result',el=>el.dataset.resultKey),originalKey);
@@ -154,7 +177,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.equal(await page.$$eval('[data-action=tab]',els=>els.length),6,'Six sections, upload and revisions merged');
   await page.screenshot({path:join(screenshotDir,'center-set-1440.png'),fullPage:true});
   await page.click('[data-action=tab][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
-  assert.match(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent),/Риски · 1/,'The menu counts candidates waiting for a decision');
+  assert.match(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent),/Риски · кандидаты 1/,'The menu explicitly counts candidates, not registered risks');
   for(const width of [1440,375]){await page.setViewport({width,height:900});await page.screenshot({path:join(screenshotDir,`center-candidates-${width}.png`),fullPage:true});}
   await page.setViewport({width:1440,height:900});
   await page.click('section.panel [data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');
@@ -182,6 +205,33 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.setViewport({width:1440,height:900});await page.click('[data-action=tab][data-value=history]');await page.waitForFunction(()=>document.body.textContent.includes('Аналитик:'));
   await page.screenshot({path:join(screenshotDir,'center-history-1440.png')});
   await page.setViewport({width:1440,height:900});
+  // A change beyond the old 400-character cutoff remains visible and highlighted.
+  const comparisonFiles=[10,30].map(days=>execFileSync('python3',['-c',`import io,zipfile,sys
+b=io.BytesIO()
+with zipfile.ZipFile(b,'w') as z:
+ z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'+sys.argv[1]+'</w:t></w:r></w:p></w:body></w:document>')
+sys.stdout.buffer.write(b.getvalue())`,'6.2. '+('Работы выполняются после согласования. '.repeat(18))+'Оплата в течение '+days+' дней.']).toString('base64'));
+  await page.evaluate(async({stored,comparisonFiles})=>{
+    let parent='';
+    for(const encoded of comparisonFiles){
+      const response=await fetch('/docs/api/contracts/'+stored+'/files',{method:'POST',headers:{'X-Docs-Request':'1','X-File-Name':'contract.docx'},body:Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))});if(!response.ok)throw Error(await response.text());const file=await response.json();
+      const revision=await fetch('/docs/api/contracts/'+stored+'/revisions',{method:'POST',headers:{'Content-Type':'application/json','X-Docs-Request':'1'},body:JSON.stringify({file_ids:[file.file.id],parent_id:parent,note:'Сравнение длинного пункта'})});if(!revision.ok)throw Error(await revision.text());parent=(await revision.json()).id;
+    }
+  },{stored,comparisonFiles});
+  await page.goto('http://127.0.0.1:3119/docs/#'+stored,{waitUntil:'networkidle0'});await page.reload({waitUntil:'networkidle0'});
+  await page.click('[data-action=tab][data-value=set]');await page.click('[data-action=compare]');
+  await page.waitForSelector('.clause-comparison .comparison');
+  const texts=await page.$$eval('.clause-comparison .diff-text',els=>els.map(el=>el.textContent));
+  assert.ok(texts.some(text=>text.endsWith('Оплата в течение 10 дней.')));assert.ok(texts.some(text=>text.endsWith('Оплата в течение 30 дней.')));
+  assert.match(await page.$eval('.clause-comparison del',el=>el.textContent),/10/);assert.match(await page.$eval('.clause-comparison ins',el=>el.textContent),/30/);
+  await page.screenshot({path:join(screenshotDir,'center-full-comparison-1440.png'),fullPage:true});
+  await page.click('[data-action=tab][data-value=set]');
+  const revisionsBefore=app.db.prepare('SELECT count(*) n FROM revisions').get().n,analysesBefore=app.db.prepare('SELECT count(*) n FROM analyses').get().n;
+  await page.click('input[data-file-choice]:not(:checked)');
+  await page.type('[data-form=revision] [name=note]','Создать и проверить одним действием');
+  await page.click('[data-form=revision] button[value=analyze]');
+  await page.waitForFunction(()=>document.querySelector('[data-action=tab][data-value=analysis]').getAttribute('aria-current')==='page'&&document.body.textContent.includes('В очереди'));
+  assert.equal(app.db.prepare('SELECT count(*) n FROM revisions').get().n,revisionsBefore+1);assert.equal(app.db.prepare('SELECT count(*) n FROM analyses').get().n,analysesBefore+1);
   assert.deepEqual(errors,[]);
   console.log('PASS center and side layouts: saved/quick, source links, draft preservation, saving decisions, same run, keyboard focus, 1440/768/375.');
   console.log('PASS neutral login, header, catalogue and contract context; both contractor choices preserved.');

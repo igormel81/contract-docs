@@ -8,6 +8,7 @@ import { sharedInstruction, analystInstruction, reviewerInstruction, proposalIns
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
 import { resultSources, leanResult } from './sources.mjs';
+import { legalInstruction, legalStatus } from './legal.mjs';
 
 const disabled = ['shell_tool','unified_exec','apps','plugins','remote_plugin','hooks','multi_agent','multi_agent_v2','browser_use','browser_use_external','computer_use','image_generation','view_image','workspace_dependencies','skill_search','code_mode_host','in_app_browser','in_app_local_automation','goals','sleep_tool'];
 async function stopChild(child) {
@@ -97,7 +98,9 @@ export class CodexRunner {
     // run, the documents do not. Whether the provider caches that prefix is measured,
     // not assumed; the order costs nothing either way.
     const { profile, rules: ruleSet, instructionVersion: setVersion, kind, ...material } = snapshot;
-    const prompt = `${sharedInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
+    // Keep the frozen text and its edition; expiry can only lower confidence.
+    if (material.legal) material.legal = { ...material.legal, status: legalStatus(material.legal) };
+    const prompt = `${sharedInstruction}\n${legalInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
     const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
     const startedAt = Date.now();
@@ -168,7 +171,7 @@ export class CodexRunner {
         const timer = setTimeout(() => void stopChild(child), 3 * 60000); timer.unref();
         child.stdout.on('data', chunk => { if (exceeded) return; output += chunk; if (output.length > 512 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
         child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-4000); });
-        child.stdin.on('error', () => {}); child.stdin.end(`${proposalInstruction}\nДАННЫЕ:\n${JSON.stringify(request)}`);
+        child.stdin.on('error', () => {}); child.stdin.end(`${proposalInstruction}\n${legalInstruction}\nДАННЫЕ:\n${JSON.stringify(request)}`);
         child.on('error', () => { clearTimeout(timer); reject(new HttpError(503, 'Исполнитель Codex недоступен.')); });
         child.on('close', code => {
           clearTimeout(timer);

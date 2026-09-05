@@ -4,6 +4,7 @@ import { id, now } from './db.mjs';
 import { HttpError, choice, hash, required, body } from './security.mjs';
 import { format, extract } from './documents.mjs';
 import { profiles, rules, instructionVersion } from './rules.mjs';
+import { withLegalContext } from './legal.mjs';
 
 const active = p => ['queued','primary','review'].includes(p.status);
 const hour = 60 * 60 * 1000;
@@ -36,7 +37,8 @@ export class QuickChecks {
   view(p) {
     return { id: p.id, contractor: p.contractor, status: p.status, created: p.created,
       expires: new Date(p.expires).toISOString(), files: p.files, primary_result: p.primary,
-      review_result: p.review, error: p.error, uploading: p.uploading, temporary: true };
+      review_result: p.review, error: p.error, uploading: p.uploading, temporary: true,
+      queuedAt: p.queuedAt || null, stageStartedAt: p.stageStartedAt || null, legal: p.legal || null };
   }
   create(user, contractor) {
     if (this.closing) throw new HttpError(503,'Сервис перезапускается. Повторите позже.');
@@ -101,7 +103,8 @@ export class QuickChecks {
       if (!p.files.length||p.files.some(f=>f.status!=='ready')) throw new HttpError(400,'Загрузите читаемые документы; удалите файлы с ошибками перед запуском.');
       const documents=p.files.map(f=>({id:f.id,name:f.name,hash:f.hash,...f.extraction}));
       if (JSON.stringify(documents).length>360000) throw new HttpError(413,'Пакет слишком велик: максимум 360 000 символов.');
-      p.snapshot={version:1,kind:'contract',profile:profiles[p.contractor],rules,instructionVersion,documents,created:now(),temporary:true};
+      p.snapshot=p.snapshot||withLegalContext({version:1,kind:'contract',profile:profiles[p.contractor],rules,instructionVersion,documents,created:now(),temporary:true});
+      p.legal=p.snapshot.legal;
       p.status='queued';p.queuedAt=now();p.error=null;
       return this.view(p);
     } finally { p.starting=false; }
@@ -117,11 +120,11 @@ export class QuickChecks {
       try {
         if (!alive()) return;
         if (!p.primary) {
-          p.status='primary';
+          p.status='primary';p.stageStartedAt=now();
           const primary=await this.runner.execute(p.user,p.id,p.snapshot,'primary',null,context('primary'));
           if(!alive())return;p.primary=primary;
         }
-        p.status='review';
+        p.status='review';p.stageStartedAt=now();
         const review=await this.runner.execute(p.user,p.id,p.snapshot,'review',p.primary,context('review'));
         if(!alive())return;p.review=review;p.status='complete';p.snapshot=null;
       } catch(e) {
@@ -139,7 +142,7 @@ export class QuickChecks {
     p.deleting=(async()=>{
       await this.runner.cancel(p.user,p.id);
       await Promise.allSettled([...p.operations]);
-      p.files=[];p.primary=null;p.review=null;p.snapshot=null;p.error=null;
+      p.files=[];p.primary=null;p.review=null;p.snapshot=null;p.legal=null;p.error=null;
       this.items.delete(p.id);
     })();
     return p.deleting;

@@ -1,13 +1,13 @@
 {
   "name": "contract-docs",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node server/main.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check server/main.mjs && node --check server/codex.mjs && node --check public/app.js && node --check public/quick.js && node --check server/quick-checks.mjs && node --check public/document-ui.js && node --check server/sources.mjs && node --check public/summary.js && node --check scripts/rules-eval.mjs && node --check scripts/stats.mjs",
+    "check": "node --check server/main.mjs && node --check server/codex.mjs && node --check server/legal.mjs && node --check server/schema.mjs && node --check public/app.js && node --check public/quick.js && node --check server/quick-checks.mjs && node --check public/document-ui.js && node --check server/sources.mjs && node --check public/summary.js && node --check scripts/rules-eval.mjs && node --check scripts/stats.mjs",
     "rules:eval": "node scripts/rules-eval.mjs",
     "stats": "node scripts/stats.mjs"
   },

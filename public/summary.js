@@ -35,12 +35,17 @@ export function summaryText({ meta, result, full = false }) {
       lines.push(`Пункт: ${sourceLabel(reference, meta.files || [])}`);
       if (reference.quote) lines.push(`«${trim(reference.quote, 220)}»`);
     } else lines.push('Пункт: условие в проверенном комплекте не найдено.');
+    for (const reference of finding.legalSources || []) {
+      lines.push(`Норма: ${reference.title || reference.normId}${reference.sourceUrl ? ' — ' + reference.sourceUrl : ''}`);
+      if (reference.quote) lines.push(`«${reference.quote}»`);
+      if (reference.verificationStatus !== 'verified') lines.push('Актуальность нормы требует правовой проверки.');
+    }
     lines.push('');
   });
   if (!shown.length) lines.push('Замечания в этой сводке не приводятся. Отсутствие замечаний не подтверждает отсутствие рисков.', '');
   lines.push('ОГРАНИЧЕНИЯ ПРОВЕРКИ', ...result.limitations.map(x => `— ${x}`));
   if (meta.link) lines.push('', `Открыть в приложении: ${meta.link}`);
-  lines.push('', 'Это рекомендательный разбор для переговоров, а не заключение о соответствии: выводы требуют проверки сотрудником. Правовая экспертиза не выполнялась, нормативная база не подключена.');
+  lines.push('', 'Это рекомендательный разбор для переговоров, а не заключение о соответствии: выводы требуют проверки сотрудником. Объём нормативного покрытия и актуальность норм указаны в ограничениях проверки.');
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 // Messengers cut long messages; splitting on paragraph boundaries keeps a finding whole.

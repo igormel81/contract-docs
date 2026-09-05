@@ -3,6 +3,35 @@
 export const severityLabels = { high:'Высокая', medium:'Средняя', low:'Низкая' };
 export const coverageLabels = { checked:'Проверено', needs_data:'Нужны данные', not_applicable:'Не применимо' };
 export const stageLabels = { queued:'В очереди', primary:'Первичный анализ', review:'Независимое ревью', complete:'Ревью завершено', error:'Ошибка этапа', interrupted:'Прервано', cancelled:'Отменено' };
+export const legalStatusLabels = {reference_only:'Редакция требует проверки',verified:'Редакция подтверждена',stale:'Срок проверки истёк',unavailable:'Корпус недоступен'};
+export function legalReferences(items=[],esc) {
+  if(!items.length)return '';
+  return `<section class="legal-references"><h3>Нормативные основания</h3>${items.map(s=>{
+    let url='';try{const parsed=new URL(s.sourceUrl);if(parsed.protocol==='https:'&&['government.ru','pravo.gov.ru','publication.pravo.gov.ru'].includes(parsed.hostname))url=parsed.href;}catch{ /* A label stays readable even when no trusted link is available. */ }
+    const title=[s.title,s.article,s.paragraph].filter(Boolean).join(' · ');
+    return `<div class="legal-reference">${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>`:`<strong>${esc(title)}</strong>`}<small>${esc(legalStatusLabels[s.verificationStatus]||'Редакция требует проверки')}${s.edition?' · '+esc(s.edition):''}</small>${s.quote?`<blockquote>${esc(s.quote)}</blockquote>`:''}</div>`;
+  }).join('')}</section>`;
+}
+export function legalSnapshotLabel(snapshot){
+  if(!snapshot)return 'Нормативная база не была прикреплена к этому анализу';
+  if(snapshot.status==='unavailable')return 'Нормативная база недоступна для этого анализа';
+  return snapshot.status==='verified'?'Нормативные основания · редакция подтверждена':snapshot.status==='stale'?'Нормативные основания · срок проверки истёк':'Справочные нормы · актуальность не подтверждена';
+}
+// Exact token comparison: retain every character, including whitespace and numbering.
+// Bound the quadratic table for large clauses; full text remains available in fallback.
+export function wordDiff(before,after,esc){
+  const a=String(before??'').match(/\s+|\S+/gu)||[],b=String(after??'').match(/\s+|\S+/gu)||[];
+  if(a.length*b.length>400000)return {before:esc(before),after:esc(after),highlighted:false};
+  const width=b.length+1,table=new Uint16Array((a.length+1)*width);
+  for(let i=a.length-1;i>=0;i--)for(let j=b.length-1;j>=0;j--)table[i*width+j]=a[i]===b[j]?table[(i+1)*width+j+1]+1:Math.max(table[(i+1)*width+j],table[i*width+j+1]);
+  let i=0,j=0,old='',next='';
+  while(i<a.length||j<b.length){
+    if(i<a.length&&j<b.length&&a[i]===b[j]){old+=esc(a[i++]);next+=esc(b[j++]);}
+    else if(i<a.length&&(j===b.length||table[(i+1)*width+j]>=table[i*width+j+1]))old+='<del>'+esc(a[i++])+'</del>';
+    else next+='<ins>'+esc(b[j++])+'</ins>';
+  }
+  return {before:old,after:next,highlighted:true};
+}
 export function locationLabel(block) {
   const location=block?.locator;
   const label=location?.status==='uncertain'?'Номер требует проверки':location?.label||'По цитате (номер не восстановлен)';

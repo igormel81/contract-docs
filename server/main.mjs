@@ -13,6 +13,7 @@ import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
 import { findingKey } from '../public/document-ui.js';
 import { summaryText } from '../public/summary.js';
+import { legalCatalog, withLegalContext } from './legal.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
@@ -49,7 +50,7 @@ export async function createApp(options = {}) {
     if (!row) throw new HttpError(404, 'Редакция не найдена.'); return row;
   }
   const fileView = f => ({ ...f, extraction: parse(f.extraction) });
-  const analysisView = a => ({ ...a, snapshot: undefined, rules: (parse(a.snapshot)?.rules || []).map(r => ({ id: r.id, version: r.version ?? null })), primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
+  const analysisView = a => ({ ...a, snapshot: undefined, legal: parse(a.snapshot)?.legal || null, rules: (parse(a.snapshot)?.rules || []).map(r => ({ id: r.id, version: r.version ?? null })), primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
   function originFinding(origin,contract,user){
     const split=origin.indexOf(':');if(split<1)throw new HttpError(400,'Некорректная ссылка на замечание.');
     const run=owned('analyses',origin.slice(0,split),user);if(run.contract_id!==contract)throw new HttpError(400,'Замечание относится к другому договору.');
@@ -83,7 +84,7 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.1.8' });
+    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.2.0' });
     const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));
@@ -127,8 +128,9 @@ export async function createApp(options = {}) {
     if (path === '/docs/api/bootstrap' && req.method === 'GET') return send(res,200,{
       customers: db.prepare('SELECT * FROM customers WHERE user_id=? ORDER BY name').all(user.id),
       contracts: db.prepare('SELECT c.*, (SELECT COUNT(*) FROM revisions r WHERE r.contract_id=c.id) revision_count FROM contracts c WHERE user_id=? ORDER BY created DESC').all(user.id),
-      profiles, rules, codex: await runner.status(canManageCodex(user))
+      profiles, rules: withLegalContext({rules}).rules, legal: legalCatalog(), codex: await runner.status(canManageCodex(user))
     });
+    if (path === '/docs/api/legal-base' && req.method === 'GET') return send(res,200,legalCatalog());
     if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await runner.status(canManageCodex(user)));
     if (path === '/docs/api/codex/login' && req.method === 'POST') {
       requireCodexAdmin(user); limit(db,'codex-login:application',5,3600000);
@@ -259,7 +261,7 @@ export async function createApp(options = {}) {
         const sideNote=plain.includes(mine)?null:other.find(inn=>plain.includes(inn))
           ?'ИНН выбранного подрядчика в тексте не найден, зато найден ИНН другого профиля. Проверьте, та ли сторона выбрана; вывод об интересах стороны сделай с этой оговоркой.'
           :'ИНН выбранного подрядчика в тексте не найден. Возможно, реквизиты не извлеклись или выбрана не та сторона: отрази это в ограничениях.';
-        const snapshot={revisionId:rev.id,version:rev.number,kind:contract.kind,profile:profiles[contract.contractor],contractorNote:sideNote,rules,instructionVersion,documents,created:now()};
+        const snapshot=withLegalContext({revisionId:rev.id,version:rev.number,kind:contract.kind,profile:profiles[contract.contractor],contractorNote:sideNote,rules,instructionVersion,documents,created:now()});
         const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),now(),now());
         audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}${sideNote?'; '+sideNote:''}`); return send(res,202,{id:key,note:sideNote});
       }
@@ -354,7 +356,8 @@ export async function createApp(options = {}) {
         }).filter(Boolean);
         const rule=snapshot.rules.find(r=>r.id===finding.rule);
         const answer=await runner.proposal({profile:snapshot.profile,rule:rule&&{id:rule.id,title:rule.title,instruction:rule.instruction,avoid:rule.avoid},
-          finding:{rule:finding.rule,title:finding.title,description:finding.description,severity:finding.severity},clauses});
+          finding:{rule:finding.rule,title:finding.title,description:finding.description,severity:finding.severity,legalSources:finding.legalSources||[]},
+          legal:snapshot.legal?{...snapshot.legal,norms:snapshot.legal.norms.filter(n=>(finding.legalSources||[]).some(s=>s.normId===n.id))}:null,clauses});
         audit(db,user.id,analysis.contract_id,'Запрошена формулировка правки',`${finding.rule}: ${finding.title}`);
         return send(res,200,{proposal:answer.proposal,note:answer.note});
       }
