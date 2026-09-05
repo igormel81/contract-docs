@@ -25,3 +25,16 @@ test('document logo replaces the letter mark and is a self-contained SVG',async(
   assert.match(svg,/viewBox="0 0 30 34"/);
   assert.doesNotMatch(svg,/<(?:script|foreignObject|image|use|style)\b|\bon\w+=|\bhref=|url\(/i);
 });
+
+test('public introduction explains audience, benefits and current AI limitations',async()=>{
+  const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+  const login=app.slice(app.indexOf('function loginView()'),app.indexOf('function loginView()')+6000);
+  assert.match(login,/aria-labelledby="promo-title"/);
+  assert.match(login,/Для подрядчиков, юристов и руководителей проектов/);
+  assert.match(login,/со ссылками на исходные пункты/);
+  assert.match(login,/отдельным ревью/);
+  assert.match(login,/Разовая проверка без добавления в хранилище/);
+  assert.match(login,/не заменяет юридическую экспертизу/);
+  assert.match(login,/текст передаётся в Codex/);
+  assert.ok(login.indexOf('promo-title')<login.indexOf('data-form="auth"'));
+});

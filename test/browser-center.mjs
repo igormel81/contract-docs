@@ -53,6 +53,22 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
     await page.setViewport({width:1440,height:900});
   }
   await assertRepositoryLink('login');
+  for(const width of [1440,768,375]){
+    await page.setViewport({width,height:900});
+    assert.equal(await page.$$eval('#promo-title',els=>els.length),1);
+    assert.match(await page.$eval('.promo-audience',el=>el.textContent),/подрядчиков, юристов и руководителей проектов/);
+    assert.equal(await page.$$eval('.promo-benefits li',els=>els.length),3);
+    assert.ok(await page.$eval('.promo-benefits',el=>el.getBoundingClientRect().height>0));
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    if(width===1440)assert.ok(await page.$eval('[data-form=auth]',el=>el.getBoundingClientRect().bottom<=innerHeight));
+    if(width===375){
+      await page.click('[data-action=auth-focus]');
+      assert.ok(await page.$eval('[name=login]',el=>el===document.activeElement&&el.getBoundingClientRect().top>=0&&el.getBoundingClientRect().bottom<=innerHeight));
+    }
+    await page.focus('[name=login]');
+    assert.ok(await page.$eval('[name=login]',el=>el===document.activeElement));
+  }
+  await page.setViewport({width:1440,height:900});
   await assertNeutralInterface();
   assert.equal(await page.$eval('meta[name=description]',el=>el.content),'Внутреннее рабочее место для договоров, редакций и рисков.');
   await page.click('[data-action=auth-mode]');await page.type('[name=login]','owner');await page.type('[name=password]','synthetic-ui-password');await page.click('[data-form=auth] [type=submit]');
