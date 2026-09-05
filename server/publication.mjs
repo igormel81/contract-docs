@@ -11,6 +11,8 @@ const assets=new Map([
   ]),
   ['/docs/downloads/contract-docs-0.2.1.tar.gz',['downloads/contract-docs-0.2.1.tar.gz','application/gzip','contract-docs-0.2.1.tar.gz']],
   ['/docs/downloads/contract-docs-0.2.1.tar.gz.sha256',['downloads/contract-docs-0.2.1.tar.gz.sha256','text/plain; charset=utf-8','contract-docs-0.2.1.tar.gz.sha256']],
+  ['/docs/downloads/contract-docs-0.2.2.tar.gz',['downloads/contract-docs-0.2.2.tar.gz','application/gzip','contract-docs-0.2.2.tar.gz']],
+  ['/docs/downloads/contract-docs-0.2.2.tar.gz.sha256',['downloads/contract-docs-0.2.2.tar.gz.sha256','text/plain; charset=utf-8','contract-docs-0.2.2.tar.gz.sha256']],
   ['/docs/downloads/manifest.json',['downloads/manifest.json','application/json; charset=utf-8']]
 ]);
 export async function servePublication(req,res,path,root){

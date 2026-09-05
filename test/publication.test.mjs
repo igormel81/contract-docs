@@ -33,5 +33,11 @@ test('documents are public while application data and arbitrary source paths sta
     for(const path of ['/docs/downloads/auth.json','/docs/local-installation/server/main.mjs','/docs/downloads/%2e%2e%2fdata/contracts.sqlite','/docs/local-installation/__proto__'])assert.equal((await fetch(base+path)).status,404);
     assert.equal((await fetch(base+'/docs/local-installation/architecture.html',{method:'POST'})).status,404);
     assert.match(await readFile(new URL('../public/app.js',import.meta.url),'utf8'),/Локальная установка/);
+    const architecture=await (await fetch(base+'/docs/local-installation/architecture.html')).text();
+    assert.match(architecture,/128 ГБ RAM/);
+    assert.match(architecture,/Qwen\/Qwen3\.5-27B/);
+    assert.match(architecture,/Qwen\/Qwen3\.6-27B/);
+    assert.match(architecture,/не испытана в этом сервисе/);
+    assert.match(architecture,/huggingface\.co\/Qwen\/Qwen3\.5-27B/);
   }finally{await app.close();await rm(dir,{recursive:true,force:true});}
 });

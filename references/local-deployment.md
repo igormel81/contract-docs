@@ -1,6 +1,6 @@
 # Развёртывание «Договоры и риски» в организации
 
-Редакция руководства: 5 сентября 2026. Поставка исходников: 0.2.1. Аудитория: системный администратор и команда внедрения.
+Редакция руководства: 5 сентября 2026. Поставка исходников: 0.2.2. Аудитория: системный администратор и команда внедрения.
 
 ## 1. Что можно установить сейчас
 
@@ -19,11 +19,11 @@
 Скачайте архив, соседний файл SHA-256 и manifest.json со страницы «Локальная установка». На Linux в каталоге скачивания:
 
 ```sh
-sha256sum -c contract-docs-0.2.1.tar.gz.sha256
-tar -tzf contract-docs-0.2.1.tar.gz
+sha256sum -c contract-docs-0.2.2.tar.gz.sha256
+tar -tzf contract-docs-0.2.2.tar.gz
 ```
 
-Ожидается один верхний каталог `contract-docs-0.2.1/`. Файл `SOURCE-REVISION.txt` содержит commit исходников; `MANIFEST.sha256` — хеши каждого включённого файла. SHA-256 подтверждает целостность, но не является цифровой подписью издателя; сам архив получать по доверенному HTTPS-каналу.
+Ожидается один верхний каталог `contract-docs-0.2.2/`. Файл `SOURCE-REVISION.txt` содержит commit исходников; `MANIFEST.sha256` — хеши каждого включённого файла. SHA-256 подтверждает целостность, но не является цифровой подписью издателя; сам архив получать по доверенному HTTPS-каналу.
 
 | Каталог | Назначение |
 |---|---|
@@ -54,13 +54,29 @@ npm --version
 
 Для воспроизводимости зафиксируйте версии OS, Node, npm, Python, bubblewrap, извлекателей и CLI в акте установки. Не подменяйте работоспособность песочницы отключением изоляции; на системах с ограничениями AppArmor/user namespaces подготовьте узкое согласованное правило, а не глобальное ослабление защиты.
 
+### 3.1. Если анализ должен выполняться локальной моделью
+
+GPU не нужна для текущего варианта с внешним Codex. После разработки локального исполнителя рекомендуем начать со следующих конфигураций; это ориентиры пилота, не подтверждённая производительность.
+
+| Вариант | Аппаратная конфигурация | Модель для испытаний |
+|---|---|---|
+| Экономный | 8 физических CPU-ядер, 64 ГБ RAM, NVMe 1 ТБ, GPU 24 ГБ VRAM | Qwen3.5-9B, проверенная Q4–Q8; 1 активный запрос |
+| Рекомендуемый | 12–16 физических ядер, 128 ГБ RAM, 2 × 2 ТБ NVMe RAID1, GPU 48 ГБ VRAM, backup отдельно | Qwen3.5-27B, Q4–Q6; два этапа последовательно; начать с контекста 32–64K |
+| С запасом для подразделения | Inference: 24 ядра, 256 ГБ RAM, GPU 96 ГБ либо 2 × 48 ГБ; отдельные web/БД и backup | Проверить 27B/35B, длинный контекст и 2 запроса после доработки очереди |
+
+Две GPU по 48 ГБ не превращаются автоматически в одну 96 ГБ. При двух разных моделях учитывать память обеих или задержку смены весов. 27B в BF16 — около 54 ГБ только полезных весов, поэтому для карты 48 ГБ нужна совместимая квантизация.
+
+Дополнительно сравнить Qwen3.6-27B; Qwen3.6-35B-A3B — при приоритете пропускной способности; Mistral-Small-3.2-24B-Instruct-2506 — как другое семейство для ревью. Точные ID, первичные источники, лицензии, расчёт памяти, электропитание и приёмка приведены в [разделе 9 архитектуры](<../specs/(sep-26)-on-premise-architecture.md>). Рекомендации не подтверждают качество на российских договорах: необходим размеченный контрольный набор.
+
+Не закупайте оборудование до проверки полного комплекта и этапа ревью на выбранной модели. Недостаток контекста обрабатывается явно; существующая нумерация документа сохраняется.
+
 ## 4. Разместить исходники и проверить зависимости
 
 Ниже — **первая установка на отдельном хосте**. Если служба, пользователь или каталог уже существуют, остановитесь и используйте процедуру обновления в разделе 8. Архив сначала проверьте из непривилегированного аккаунта.
 
 ```sh
-tar -xzf contract-docs-0.2.1.tar.gz
-cd contract-docs-0.2.1
+tar -xzf contract-docs-0.2.2.tar.gz
+cd contract-docs-0.2.2
 sha256sum -c MANIFEST.sha256
 npm ci --omit=dev --ignore-scripts
 npm run check
@@ -72,14 +88,14 @@ node deploy/onprem/preflight.mjs
 
 ```sh
 sudo useradd --system --home-dir /var/lib/contract-docs --shell /usr/sbin/nologin contract-docs
-sudo install -d -m 0755 /opt/contract-docs/releases/0.2.1
-sudo cp -a . /opt/contract-docs/releases/0.2.1/
-sudo install -d -m 0755 /opt/contract-docs/releases/0.2.1/public/downloads
-sudo install -m 0644 ../contract-docs-0.2.1.tar.gz ../contract-docs-0.2.1.tar.gz.sha256 ../manifest.json /opt/contract-docs/releases/0.2.1/public/downloads/
-sudo chown -R root:root /opt/contract-docs/releases/0.2.1
-sudo chmod -R a+rX /opt/contract-docs/releases/0.2.1
+sudo install -d -m 0755 /opt/contract-docs/releases/0.2.2
+sudo cp -a . /opt/contract-docs/releases/0.2.2/
+sudo install -d -m 0755 /opt/contract-docs/releases/0.2.2/public/downloads
+sudo install -m 0644 ../contract-docs-0.2.2.tar.gz ../contract-docs-0.2.2.tar.gz.sha256 ../manifest.json /opt/contract-docs/releases/0.2.2/public/downloads/
+sudo chown -R root:root /opt/contract-docs/releases/0.2.2
+sudo chmod -R a+rX /opt/contract-docs/releases/0.2.2
 sudo install -d -m 0700 -o contract-docs -g contract-docs /var/lib/contract-docs
-sudo ln -s /opt/contract-docs/releases/0.2.1 /opt/contract-docs/current
+sudo ln -s /opt/contract-docs/releases/0.2.2 /opt/contract-docs/current
 sudo -u contract-docs /usr/bin/node /opt/contract-docs/current/deploy/onprem/preflight.mjs
 sudo install -d -m 0700 /etc/contract-docs
 sudo install -m 0600 deploy/onprem/contract-docs.env.example /etc/contract-docs/contract-docs.env
@@ -108,7 +124,7 @@ curl --fail http://127.0.0.1:3107/docs/health
 sudo systemctl is-active contract-docs
 ```
 
-Ожидается health со `status=ok`, `version=0.2.1`. Health не проверяет подключение модели, извлечение, качество анализа или наличие свободного диска.
+Ожидается health со `status=ok`, `version=0.2.2`. Health не проверяет подключение модели, извлечение, качество анализа или наличие свободного диска.
 
 ## 5. HTTPS и первый пользователь
 
@@ -193,4 +209,5 @@ sudo sh -eu -c '
 
 | Дата | Изменение |
 |---|---|
+| 2026-09-05 | Добавлены аппаратные конфигурации, кандидаты локальных моделей и ссылка на расчёт VRAM; исходная поставка обновлена до 0.2.2 |
 | 2026-09-05 | Выпущены руководство, примеры конфигурации и проверяемый исходный архив; текущий вариант с Codex отделён от проекта локальных моделей |
