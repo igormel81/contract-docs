@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="30" height="34" viewBox="0 0 30 34" role="img" aria-labelledby="title">
+  <title id="title">Договоры и риски — документ с выделенным пунктом</title>
+  <rect width="30" height="34" rx="4" fill="#315d48"/>
+  <path d="M11 6h7l6 6v14a2 2 0 0 1-2 2H11a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" fill="#fff"/>
+  <path d="M18 6v5a1 1 0 0 0 1 1h5" fill="#bdd2c3"/>
+  <path d="M13 16h7m-7 4h7m-7 4h4" fill="none" stroke="#315d48" stroke-width="2" stroke-linecap="round"/>
+  <path d="M6 18H4v8h2" fill="none" stroke="#e7c578" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

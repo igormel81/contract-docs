@@ -36,6 +36,9 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   }
   await page.goto('http://127.0.0.1:3119/docs/',{waitUntil:'networkidle0'});
   async function assertRepositoryLink(surface){
+    await page.waitForFunction(()=>{const image=document.querySelector('.brand img.mark');return image?.complete&&image.naturalWidth>0;});
+    assert.equal(await page.$eval('.brand img.mark',el=>el.alt),'');
+    assert.equal(await page.$eval('link[rel=icon]',el=>new URL(el.href).pathname),'/docs/logo.svg');
     for(const width of [1440,768,375]){
       await page.setViewport({width,height:900});
       const selector='a[href="https://github.com/igormel81/contract-docs"]';

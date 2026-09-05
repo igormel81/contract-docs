@@ -33,6 +33,7 @@ test('documents are public while application data and arbitrary source paths sta
     for(const path of ['/docs/downloads/auth.json','/docs/local-installation/server/main.mjs','/docs/downloads/%2e%2e%2fdata/contracts.sqlite','/docs/local-installation/__proto__'])assert.equal((await fetch(base+path)).status,404);
     assert.equal((await fetch(base+'/docs/local-installation/architecture.html',{method:'POST'})).status,404);
     const application=await (await fetch(base+'/docs/app.js')).text();
+    const logo=await fetch(base+'/docs/logo.svg');assert.equal(logo.status,200);assert.match(logo.headers.get('content-type'),/^image\/svg\+xml/);assert.equal(logo.headers.get('x-content-type-options'),'nosniff');assert.match(await logo.text(),/<svg/);
     assert.match(application,/Локальная установка/);
     const repositoryLink=/href="https:\/\/github\.com\/igormel81\/contract-docs" target="_blank" rel="noopener noreferrer" aria-label="Код на GitHub \(новая вкладка\)">Код на GitHub<\/a>/g;
     assert.equal([...application.matchAll(repositoryLink)].length,2,'Repository is linked before and after login');
