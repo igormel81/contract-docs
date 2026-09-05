@@ -14,6 +14,7 @@ import { sourceRecord, resultSources } from './sources.mjs';
 import { findingKey } from '../public/document-ui.js';
 import { summaryText } from '../public/summary.js';
 import { legalCatalog, withLegalContext } from './legal.mjs';
+import { servePublication } from './publication.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
@@ -84,7 +85,8 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.2.0' });
+    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.2.1' });
+    if (await servePublication(req,res,path,root)) return;
     const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));

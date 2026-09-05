@@ -1,15 +1,17 @@
 {
   "name": "contract-docs",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node server/main.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check server/main.mjs && node --check server/codex.mjs && node --check server/legal.mjs && node --check server/schema.mjs && node --check public/app.js && node --check public/quick.js && node --check server/quick-checks.mjs && node --check public/document-ui.js && node --check server/sources.mjs && node --check public/summary.js && node --check scripts/rules-eval.mjs && node --check scripts/stats.mjs",
+    "check": "node --check server/main.mjs && node --check server/codex.mjs && node --check server/legal.mjs && node --check server/schema.mjs && node --check public/app.js && node --check public/quick.js && node --check server/quick-checks.mjs && node --check public/document-ui.js && node --check server/sources.mjs && node --check public/summary.js && node --check scripts/rules-eval.mjs && node --check scripts/stats.mjs && node --check server/publication.mjs && node --check scripts/publication.mjs && node --check deploy/onprem/preflight.mjs",
     "rules:eval": "node scripts/rules-eval.mjs",
-    "stats": "node scripts/stats.mjs"
+    "stats": "node scripts/stats.mjs",
+    "docs:build": "node scripts/publication.mjs",
+    "source:bundle": "node scripts/publication.mjs --bundle"
   },
   "dependencies": { "ajv": "8.20.0" }
 }

@@ -5,6 +5,7 @@
 @media(max-width:620px){:root{font-size:16px}.login-page{grid-template-columns:1fr}.login-story{padding:28px;gap:18px}.login-story h1{font-size:36px;max-width:none}.login-story .steps{display:none}.login-box{padding:28px 20px}.login-box .form{width:100%;max-width:400px}.topbar .brand{font-size:15px}.panels{display:flex;flex-direction:column}.panel.inspector{border-left:0;border-top:1px solid var(--line)}.panel .content{max-height:65dvh}.facts{grid-template-columns:1fr 1fr}.passport-strip{padding:12px}.context h1{font-size:19px}.context .row{width:100%}.context select{flex:1}.comparison{grid-template-columns:1fr}input,select,textarea{font-size:16px}button{min-height:44px}.compact-action{min-height:36px}.sidebar{gap:8px}.tabs button{font-size:13px;min-height:44px}.footer{padding:8px 14px}.login-story .brand{font-size:14px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 .main{grid-template-columns:minmax(0,1fr)}
+.installation-link{display:inline-flex;align-items:center;min-height:44px;font-size:13px;max-width:100%}
 #notice{pointer-events:none}
 .main:not(.quick-main){grid-template-rows:auto minmax(0,1fr)}
 .passport-compact{margin:12px 0 0}

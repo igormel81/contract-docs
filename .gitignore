@@ -18,3 +18,4 @@ auth.json
 backups/
 uploads/
 runtime/
+public/downloads/

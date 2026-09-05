@@ -1,0 +1,19 @@
+# Dedicated virtual host. Replace hostname and TLS paths. Do not overwrite an existing server block.
+server {
+    listen 443 ssl;
+    server_name contracts.example.org;
+    ssl_certificate /etc/ssl/contract-docs/fullchain.pem;
+    ssl_certificate_key /etc/ssl/contract-docs/privkey.pem;
+    client_max_body_size 20m;
+    location = / { return 302 /docs/; }
+    location /docs {
+        proxy_pass http://127.0.0.1:3107;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 60s;
+        access_log off;
+    }
+}
