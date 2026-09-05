@@ -29,6 +29,7 @@ async function fixture(t,quickOptions={}){
   }
   const a=await request('/register',{login:'owner',password:'synthetic-owner-password'}),b=await request('/register',{login:'member',password:'synthetic-member-password'});
   assert.equal(a.status,200);assert.equal(b.status,200);
+  const organization=await request('/organizations',{name:'Синтетический исполнитель',base:'Казань'},a.cookie);a.organization=organization.data.id;assert.equal(organization.status,201);
   async function upload(key,bytes,name='fixture.docx',cookie=a.cookie){const res=await fetch(base+`/quick-checks/${key}/files`,{method:'POST',headers:{Origin:options.origin,'X-Docs-Request':'1','X-File-Name':encodeURIComponent(name),Cookie:cookie},body:bytes});return{status:res.status,data:await res.json()};}
   async function connect(){await mkdir(app.runner.home(),{recursive:true});await writeFile(join(app.runner.home(),'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));}
   return{get app(){return app;},dir,runtime,request,upload,a,b,connect,advance:ms=>{clock+=ms;},restart:async()=>{await app.close();await start();}};
@@ -38,9 +39,9 @@ function emptyCatalogue(app){for(const table of ['customers','contracts','files'
 test('one-off package: batch dedup, two stages, citations and export without durable document records',async t=>{
   const f=await fixture(t);const {request,a,b}=f;
   assert.equal((await request('/quick-checks')).status,401);
-  assert.equal((await request('/quick-checks',{contractor:'modeus'},a.cookie,{'X-Docs-Request':'0'})).status,403);
-  const created=await request('/quick-checks',{contractor:'modeus'},a.cookie);assert.equal(created.status,201);const key=created.data.id;
-  assert.equal((await request('/quick-checks',{contractor:'custis'},a.cookie)).status,409);
+  assert.equal((await request('/quick-checks',{contractor:a.organization},a.cookie,{'X-Docs-Request':'0'})).status,403);
+  const created=await request('/quick-checks',{contractor:a.organization},a.cookie);assert.equal(created.status,201);const key=created.data.id;
+  assert.equal((await request('/quick-checks',{contractor:a.organization},a.cookie)).status,409);
   assert.equal((await request('/quick-checks/'+key,undefined,b.cookie)).status,404);
   assert.equal((await request('/quick-checks',undefined,b.cookie)).data.length,0);
   assert.equal((await f.upload(key,Buffer.from('not pdf'),'fake.pdf')).status,415);
@@ -55,15 +56,15 @@ test('one-off package: batch dedup, two stages, citations and export without dur
   assert.equal((await f.upload(key,document('Late file'))).status,409);
   await f.app.runner.tick();
   const packet=(await request('/quick-checks/'+key,undefined,a.cookie)).data;
-  assert.equal(packet.status,'complete');assert.equal(packet.files.length,2);assert.equal(packet.contractor,'modeus');
+  assert.equal(packet.status,'complete');assert.equal(packet.files.length,2);assert.equal(packet.contractor,a.organization);
   assert.notEqual(packet.primary_result.execution.session,packet.review_result.execution.session);
   assert.equal(packet.review_result.passport[0].sources[0].fileId,first.data.file.id);
   assert.equal((await request('/quick-checks/'+key+'/export',undefined,b.cookie)).status,404);
   const exported=await request('/quick-checks/'+key+'/export',undefined,a.cookie);assert.equal(exported.status,200);
-  const report=textReport(exported.data,'Модеус');assert.match(report,/Ревью завершено/);assert.ok(report.includes(marker));assert.match(report,/Источник: fixture.docx/);
+  const report=textReport(exported.data,'Синтетический исполнитель');assert.match(report,/Ревью завершено/);assert.ok(report.includes(marker));assert.match(report,/Источник: fixture.docx/);
   assert.deepEqual(await readdir(f.app.quick.root),[],'Runtime Codex sessions removed after both stages');
   assert.equal(JSON.parse(await readFile(join(f.app.runner.home(),'auth.json'),'utf8')).last_refresh,'test-refresh-marker','Refreshed application auth is retained without the temporary session');
-  emptyCatalogue(f.app);assert.equal(f.app.db.prepare('SELECT count(*) n FROM audit').get().n,0);
+  emptyCatalogue(f.app);assert.equal(f.app.db.prepare('SELECT count(*) n FROM audit WHERE contract_id IS NOT NULL').get().n,0);
   for(const path of await files(f.dir))assert.equal((await readFile(path)).includes(Buffer.from('PRIVATE_ONCE_MARKER')),false,'No document text in durable data: '+path);
   assert.equal((await request('/quick-checks/'+key+'/discard',{},b.cookie)).status,404);
   assert.equal((await request('/quick-checks/'+key+'/discard',{},a.cookie)).status,200);
@@ -71,11 +72,11 @@ test('one-off package: batch dedup, two stages, citations and export without dur
 });
 
 test('review failure retains temporary primary result, retry and TTL destroy all packet state',async t=>{
-  const f=await fixture(t);await f.connect();const create=await f.request('/quick-checks',{contractor:'custis'},f.a.cookie),key=create.data.id;
+  const f=await fixture(t);await f.connect();const create=await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie),key=create.data.id;
   await f.upload(key,document('FAIL_REVIEW Временный договор на разработку.'));
   await f.request('/quick-checks/'+key+'/analyze',{},f.a.cookie);await f.app.runner.tick();
   const first=(await f.request('/quick-checks/'+key,undefined,f.a.cookie)).data;assert.equal(first.status,'error');assert.ok(first.primary_result);assert.equal(first.review_result,null);
-  assert.match(textReport(first,'Кастис'),/РЕВЬЮ НЕ ЗАВЕРШЕНО/);
+  assert.match(textReport(first,'Синтетический исполнитель'),/РЕВЬЮ НЕ ЗАВЕРШЕНО/);
   assert.equal((await f.request('/quick-checks/'+key+'/analyze',{},f.a.cookie)).status,202);await f.app.runner.tick();
   assert.equal((await f.request('/quick-checks/'+key,undefined,f.a.cookie)).data.primary_result.execution.session,first.primary_result.execution.session);
   f.advance(60*60*1000+1);await f.app.quick.sweep();
@@ -84,7 +85,7 @@ test('review failure retains temporary primary result, retry and TTL destroy all
 
 test('discard and shared disconnect stop active temporary execution without restoring credentials',async t=>{
   const f=await fixture(t);await f.connect();
-  async function slow(){const made=await f.request('/quick-checks',{contractor:'custis'},f.a.cookie),key=made.data.id;await f.upload(key,document('SLOW_PRIMARY REFRESH_AUTH Временный тест.'));await f.request('/quick-checks/'+key+'/analyze',{},f.a.cookie);const running=f.app.runner.tick();await until(async()=>(await files(f.app.quick.root)).some(p=>p.endsWith('primary-started')));return{key,running};}
+  async function slow(){const made=await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie),key=made.data.id;await f.upload(key,document('SLOW_PRIMARY REFRESH_AUTH Временный тест.'));await f.request('/quick-checks/'+key+'/analyze',{},f.a.cookie);const running=f.app.runner.tick();await until(async()=>(await files(f.app.quick.root)).some(p=>p.endsWith('primary-started')));return{key,running};}
   let run=await slow();assert.equal((await f.request('/quick-checks/'+run.key+'/discard',{},f.a.cookie)).status,200);await run.running;
   assert.equal(f.app.quick.items.size,0);assert.deepEqual(await readdir(f.app.quick.root),[]);assert.equal((await f.app.runner.status()).connected,true);
   run=await slow();assert.equal((await f.request('/codex/logout',{confirm:'disconnect-application'},f.a.cookie)).status,200);await run.running;
@@ -93,7 +94,7 @@ test('discard and shared disconnect stop active temporary execution without rest
 });
 
 test('failed extraction, file removal and service restart do not retain temporary data',async t=>{
-  const f=await fixture(t);const key=(await f.request('/quick-checks',{contractor:'modeus'},f.a.cookie)).data.id;
+  const f=await fixture(t);const key=(await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie)).data.id;
   const corrupt=await f.upload(key,Buffer.from('PK\x03\x04not-a-zip'),'broken.docx');assert.equal(corrupt.status,201);assert.equal(corrupt.data.file.status,'error');
   assert.deepEqual(await readdir(f.app.quick.root),[]);
   assert.equal((await f.request(`/quick-checks/${key}/files/${corrupt.data.file.id}/remove`,{},f.a.cookie)).status,200);
@@ -104,7 +105,7 @@ test('failed extraction, file removal and service restart do not retain temporar
 
 test('temporary extraction exception and oversized text are cleaned up',async t=>{
   let failure=true;const f=await fixture(t,{extract:async()=>{if(failure)throw new Error('Synthetic extraction failure');return{status:'ready',extraction:{blocks:[{id:'b1',text:'X'.repeat(360001)}],warnings:[]}};}});
-  const key=(await f.request('/quick-checks',{contractor:'custis'},f.a.cookie)).data.id;
+  const key=(await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie)).data.id;
   assert.equal((await f.upload(key,document('Synthetic input'))).status,500);assert.deepEqual(await readdir(f.app.quick.root),[]);
   failure=false;assert.equal((await f.upload(key,document('Synthetic input'))).status,413);assert.deepEqual(await readdir(f.app.quick.root),[]);
   assert.equal((await f.request('/quick-checks/'+key,undefined,f.a.cookie)).data.files.length,0);emptyCatalogue(f.app);
@@ -113,7 +114,7 @@ test('temporary extraction exception and oversized text are cleaned up',async t=
 test('discard during extraction waits for cleanup and prevents a late file from being retained',async t=>{
   let release,entered=false;const gate=new Promise(r=>{release=r;});
   const f=await fixture(t,{extract:async()=>{entered=true;await gate;return{status:'ready',extraction:{blocks:[{id:'b1',text:'PRIVATE_LATE_FILE'}],warnings:[]}};}});
-  const key=(await f.request('/quick-checks',{contractor:'custis'},f.a.cookie)).data.id;
+  const key=(await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie)).data.id;
   const upload=f.upload(key,document('Synthetic input'));await until(()=>entered);
   const discard=f.request('/quick-checks/'+key+'/discard',{},f.a.cookie);await until(()=>f.app.quick.items.get(key)?.deleted);
   release();assert.equal((await upload).status,404);assert.equal((await discard).status,200);
@@ -121,7 +122,7 @@ test('discard during extraction waits for cleanup and prevents a late file from 
 });
 
 test('expiry interrupts active Codex and startup removes only owned orphan runtime directories',async t=>{
-  const f=await fixture(t);await f.connect();const key=(await f.request('/quick-checks',{contractor:'custis'},f.a.cookie)).data.id;
+  const f=await fixture(t);await f.connect();const key=(await f.request('/quick-checks',{contractor:f.a.organization},f.a.cookie)).data.id;
   await f.upload(key,document('SLOW_PRIMARY Temporary expiry fixture'));await f.request('/quick-checks/'+key+'/analyze',{},f.a.cookie);
   const running=f.app.runner.tick();await until(async()=>(await files(f.app.quick.root)).some(p=>p.endsWith('primary-started')));
   f.advance(60*60*1000+1);await f.app.quick.sweep();await running;

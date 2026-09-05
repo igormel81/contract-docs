@@ -12,7 +12,8 @@ let cookie='';
 async function request(path,data){const res=await fetch(base+path,{method:data===undefined?'GET':'POST',headers:{Origin:'https://igoruan.ru','X-Docs-Request':'1','Content-Type':'application/json',Cookie:cookie},body:data===undefined?undefined:JSON.stringify(data)});if(res.headers.get('set-cookie'))cookie=res.headers.get('set-cookie').split(';')[0];return {status:res.status,data:await res.json()};}
 try{
  assert.equal((await request('/register',{login:'smoke_test',password:'ephemeral-test-only'})).status,200);
- const packet=await request('/quick-checks',{contractor:'modeus'});assert.equal(packet.status,201);
+ const organization=await request('/organizations',{name:'Синтетический исполнитель'});assert.equal(organization.status,201);
+ const packet=await request('/quick-checks',{contractor:organization.data.id});assert.equal(packet.status,201);
  const docx=execFileSync('/usr/bin/python3',['-c',`import io,zipfile,sys
 b=io.BytesIO()
 with zipfile.ZipFile(b,'w') as z:

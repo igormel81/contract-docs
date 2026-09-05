@@ -3,7 +3,7 @@ import { join, basename } from 'node:path';
 import { id, now } from './db.mjs';
 import { HttpError, choice, hash, required, body } from './security.mjs';
 import { format, extract } from './documents.mjs';
-import { profiles, rules, instructionVersion } from './rules.mjs';
+import { rules, instructionVersion } from './rules.mjs';
 import { withLegalContext } from './legal.mjs';
 
 const active = p => ['queued','primary','review'].includes(p.status);
@@ -16,7 +16,7 @@ export class QuickChecks {
     this.runner = runner; this.root = join(runtime, 'quick-checks'); this.sandbox = sandbox;
     this.items = new Map(); this.operations = new Set(); this.uploads = 0;
     this.clock = options.clock || Date.now; this.ttl = options.ttl || hour;
-    this.extract = options.extract || extract;
+    this.extract = options.extract || extract; this.organizations = options.organizations;
     runner.temporary = this;
   }
   async init() {
@@ -35,18 +35,18 @@ export class QuickChecks {
     return p;
   }
   view(p) {
-    return { id: p.id, contractor: p.contractor, status: p.status, created: p.created,
+    return { id: p.id, contractor: p.contractor, profile: p.profile, status: p.status, created: p.created,
       expires: new Date(p.expires).toISOString(), files: p.files, primary_result: p.primary,
       review_result: p.review, error: p.error, uploading: p.uploading, temporary: true,
       queuedAt: p.queuedAt || null, stageStartedAt: p.stageStartedAt || null, legal: p.legal || null };
   }
   create(user, contractor) {
     if (this.closing) throw new HttpError(503,'Сервис перезапускается. Повторите позже.');
-    choice(contractor,Object.keys(profiles));
+    const profile = this.organizations.snapshot(user,contractor);
     const existing = [...this.items.values()].find(p => p.user === user && !p.deleted && p.expires > this.clock());
     if (existing) throw new HttpError(409,'У вас уже есть временный пакет. Продолжите его или удалите перед новой проверкой.');
     if (this.items.size >= 12) throw new HttpError(429,'Все временные рабочие места заняты. Повторите позже.');
-    const p = { id:id(), user, contractor, created:now(), expires:this.clock()+this.ttl, status:'draft', files:[], primary:null, review:null, error:null, uploading:false, operations:new Set() };
+    const p = { id:id(), user, contractor, profile, created:now(), expires:this.clock()+this.ttl, status:'draft', files:[], primary:null, review:null, error:null, uploading:false, operations:new Set() };
     this.items.set(p.id,p); return this.view(p);
   }
   list(user) {
@@ -103,7 +103,7 @@ export class QuickChecks {
       if (!p.files.length||p.files.some(f=>f.status!=='ready')) throw new HttpError(400,'Загрузите читаемые документы; удалите файлы с ошибками перед запуском.');
       const documents=p.files.map(f=>({id:f.id,name:f.name,hash:f.hash,...f.extraction}));
       if (JSON.stringify(documents).length>360000) throw new HttpError(413,'Пакет слишком велик: максимум 360 000 символов.');
-      p.snapshot=p.snapshot||withLegalContext({version:1,kind:'contract',profile:profiles[p.contractor],rules,instructionVersion,documents,created:now(),temporary:true});
+      p.snapshot=p.snapshot||withLegalContext({version:1,kind:'contract',profile:p.profile,rules,instructionVersion,documents,created:now(),temporary:true});
       p.legal=p.snapshot.legal;
       p.status='queued';p.queuedAt=now();p.error=null;
       return this.view(p);

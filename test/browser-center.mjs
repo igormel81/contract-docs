@@ -38,22 +38,37 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await assertNeutralInterface();
   assert.equal(await page.$eval('meta[name=description]',el=>el.content),'Внутреннее рабочее место для договоров, редакций и рисков.');
   await page.click('[data-action=auth-mode]');await page.type('[name=login]','owner');await page.type('[name=password]','synthetic-ui-password');await page.click('[data-form=auth] [type=submit]');
-  await page.waitForSelector('[data-action=quick-open]');await page.click('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
+  await page.waitForSelector('[data-action=quick-open]');
+  await page.click('[data-action=quick-open]');await page.waitForSelector('[data-action=new-organization]');
+  assert.equal(await page.$('#quick-file-picker'),null,'No upload before choosing organization');
+  await page.click('[data-action=new-organization]');await page.type('[name=name]','Исполнитель А');
+  await page.click('.organization-form details summary');await page.type('[name=base]','Казань');await page.click('[data-form=organization] [type=submit]');
+  await page.waitForSelector('[data-action=edit-organization]');
+  await page.click('[data-action=new-organization]');await page.type('[name=name]','Исполнитель Б');
+  await page.type('[name=inn]','7707083893');await page.click('[data-action=organization-lookup]');
+  await page.waitForFunction(()=>document.querySelector('.organization-form .info')?.textContent.includes('Найдено.'));
+  assert.equal(await page.$eval('[name=name]',el=>el.value),'Исполнитель Б','LLM never overwrites typed name');
+  assert.equal(await page.$eval('[name=address]',el=>el.value),'Тестовый адрес');
+  for(const width of [1440,768,375]){await page.setViewport({width,height:900});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:join(screenshotDir,'organizations-'+width+'.png'),fullPage:true});}
+  await page.click('[data-form=organization] [type=submit]');await page.waitForSelector('[data-action=edit-organization]');
+  const orgs=await page.evaluate(async()=>await (await fetch('/docs/api/organizations')).json());
+  const orgA=orgs.find(o=>o.name==='Исполнитель А').id,orgB=orgs.find(o=>o.name==='Исполнитель Б').id;
+  await page.click('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
   await page.setViewport({width:375,height:900});
   assert.ok(await page.$eval('[data-action=quick-pick]',el=>el.getBoundingClientRect().bottom<innerHeight),'Mobile upload action fits the first screen');
   assert.equal(await page.$eval('aside.inspector',el=>getComputedStyle(el).display),'none','No empty inspector takes upload space');
   await page.setViewport({width:1440,height:900});
   await assertNeutralInterface();
-  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Кастис/);
-  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Модеус/);
-  await page.select('#quick-contractor','modeus');
-  assert.equal(await page.$eval('#quick-contractor',el=>el.value),'modeus');
+  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Исполнитель А/);
+  assert.match(await page.$eval('#quick-contractor',el=>el.textContent),/Исполнитель Б/);
+  await page.select('#quick-contractor',orgB);
+  assert.equal(await page.$eval('#quick-contractor',el=>el.value),orgB);
   await (await page.$('#quick-file-picker')).uploadFile(join(root,'Договор.docx'),join(root,'Приложение.docx'));
   await page.waitForFunction(()=>document.querySelectorAll('[data-action=quick-file]').length===2&&!document.querySelector('[data-action=quick-run]').disabled);
   await (await page.$('#quick-file-picker')).uploadFile(join(root,'Договор.docx'));
   await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('дубль'));
   assert.equal(await page.$$eval('[data-action=quick-file]',els=>els.length),2);
-  assert.equal([...app.quick.items.values()][0].contractor,'modeus');
+  assert.equal([...app.quick.items.values()][0].contractor,orgB);
   for(const width of [1440,768,375]){
     await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));
     assert.ok(s.sw<=s.w+1,JSON.stringify(s));if(width===1440)assert.ok(s.sh<=s.h+1,JSON.stringify(s));
@@ -103,7 +118,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   const encoded=(await readFile(join(root,'Договор.docx'))).toString('base64');
   const stored=await page.evaluate(async encoded=>{
     async function api(path,data){const r=await fetch('/docs/api'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-Docs-Request':'1'},body:data===undefined?undefined:JSON.stringify(data)});if(!r.ok)throw Error(await r.text());return r.json();}
-    const customer=await api('/customers',{name:'Тестовый заказчик'}),contract=await api('/contracts',{customer_id:customer.id,title:'Договор на внедрение',contractor:'custis'});
+    const customer=await api('/customers',{name:'Тестовый заказчик'}),contract=await api('/contracts',{customer_id:customer.id,title:'Договор на внедрение',contractor:Object.keys((await api('/bootstrap')).profiles)[0]});
     const response=await fetch('/docs/api/contracts/'+contract.id+'/files',{method:'POST',headers:{'X-Docs-Request':'1','X-File-Name':'contract.docx'},body:Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))});const file=await response.json();
     const revision=await api('/contracts/'+contract.id+'/revisions',{file_ids:[file.file.id],note:'Исходная'});await api('/contracts/'+contract.id+'/analyses',{revision_id:revision.id});return contract.id;
   },encoded);
@@ -113,8 +128,8 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await assertNeutralInterface();
   await page.click('[data-action=new-contract]');
   await page.waitForSelector('[data-form=contract] [name=contractor]');
-  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Кастис/);
-  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Модеус/);
+  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Исполнитель А/);
+  assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Исполнитель Б/);
   await assertNeutralInterface();
   await page.click('[data-action=cancel-form]');
   const originalCount=app.db.prepare('SELECT count(*) n FROM analyses').get().n;

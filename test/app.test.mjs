@@ -56,10 +56,11 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   }
   const a=await request('/register',{login:'tester_a',password:'valid-passphrase-1'});assert.equal(a.status,200);assert.match(a.cookie,/docs_session=/);
   const b=await request('/register',{login:'tester_b',password:'valid-passphrase-2'});assert.equal(b.status,200);
+  const orgA=(await request('/organizations',{name:'Исполнитель А',base:'Казань'},a.cookie)).data.id,orgB=(await request('/organizations',{name:'Исполнитель Б'},b.cookie)).data.id;
   assert.equal((await request('/login',{login:'tester_a',password:'wrong'})).status,401);
   assert.equal((await request('/customers',{name:'Fail'},a.cookie,'POST',{'X-Docs-Request':'0'})).status,403);
   const customer=await request('/customers',{name:'Заказчик А',inn:'7707462073'},a.cookie);assert.equal(customer.status,201);
-  const contract=await request('/contracts',{customer_id:customer.data.id,title:'Тестовый договор',contractor:'modeus'},a.cookie);assert.equal(contract.status,201);const c=contract.data.id;
+  const contract=await request('/contracts',{customer_id:customer.data.id,title:'Тестовый договор',contractor:orgA},a.cookie);assert.equal(contract.status,201);const c=contract.data.id;
   assert.equal((await request('/contracts/'+c,undefined,b.cookie)).status,404);
   assert.equal((await request('/contracts/'+c,{stage:'Подписан'},a.cookie,'PATCH')).status,400);
   assert.equal((await request('/contracts/'+c,undefined,a.cookie)).data.stage,'Подготовка');
@@ -125,8 +126,8 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.match(letter.text,/не заключение о соответствии/);
   assert.match((await summary(run.id,a.cookie,'?scope=full')).text,/Тестовый риск места работ/,'The full list keeps findings below high severity');
   assert.ok((await request('/contracts/'+c,undefined,a.cookie)).data.history.some(e=>e.action==='Сформирован текст замечаний для отправки'),'Export of contract text is journalled');
-  const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:'custis',kind:'template'},b.cookie);assert.equal(contractB.status,201);
-  const wrongContract=await request('/contracts',{title:'Другой договор',contractor:'custis',customer_id:customer.data.id},a.cookie);
+  const contractB=await request('/contracts',{title:'Шаблон второго пользователя',contractor:orgB,kind:'template'},b.cookie);assert.equal(contractB.status,201);
+  const wrongContract=await request('/contracts',{title:'Другой договор',contractor:orgA,customer_id:customer.data.id},a.cookie);
   assert.equal((await request('/contracts/'+wrongContract.data.id+'/risks',{title:'Чужой пункт',severity:'medium',owner:'Игорь',detail:'Проверка',origin:run.id+':test-finding'},a.cookie)).status,400);
   const uploadB=await fetch(base+'/contracts/'+contractB.data.id+'/files',{method:'POST',headers:{Origin:origin,'X-Docs-Request':'1','X-File-Name':'second.docx',Cookie:b.cookie},body:docx('Второй пользователь: сопровождение системы.')});assert.equal(uploadB.status,201);
   const fileB=await uploadB.json();const revB=await request('/contracts/'+contractB.data.id+'/revisions',{file_ids:[fileB.file.id]},b.cookie);

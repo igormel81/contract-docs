@@ -26,8 +26,9 @@ test('legal catalogue requires login and both workflows freeze its version in th
     assert.ok(catalog.norms.every(norm=>norm.id&&norm.text&&norm.sourceUrl));
     await mkdir(app.runner.home(),{recursive:true});
     await writeFile(join(app.runner.home(),'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));
+    const organization=await api('/organizations',{name:'Исполнитель правового теста'});
     const customer=await api('/customers',{name:'Синтетический заказчик'});
-    const contract=await api('/contracts',{customer_id:customer.id,title:'Правовая проверка теста',contractor:'modeus'});
+    const contract=await api('/contracts',{customer_id:customer.id,title:'Правовая проверка теста',contractor:organization.id});
     const bytes=execFileSync('python3',['-c',`import io,zipfile,sys
 b=io.BytesIO()
 with zipfile.ZipFile(b,'w') as z:
@@ -42,7 +43,7 @@ sys.stdout.buffer.write(b.getvalue())`]);
     assert.equal(snapshot.legal.norms[0].text,catalog.norms[0].text);
     const saved=await api('/contracts/'+contract.id);
     assert.equal(saved.analyses[0].legal.version,catalog.version);
-    const packet=await api('/quick-checks',{contractor:'modeus'});
+    const packet=await api('/quick-checks',{contractor:organization.id});
     await upload('/quick-checks/'+packet.id+'/files');
     await api('/quick-checks/'+packet.id+'/analyze',{});
     assert.equal(app.quick.items.get(packet.id).snapshot.legal.version,catalog.version);

@@ -17,8 +17,8 @@ export function textReport(packet, profileName) {
 
 export class QuickUI {
   constructor(deps){Object.assign(this,deps);this.reset();}
-  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.returnTab='files';this.source=null;this.profile='custis';this.error='';this.batch=false;this.summary='';this.filter='all';this.inspectorOpen=false;this.inspectorWide=false;}
-  async open(){this.error='';const generation=this.generation,list=await this.api('/quick-checks');if(generation!==this.generation)return;this.packet=list[0]||null;if(this.packet){this.profile=this.packet.contractor;if(this.packet.status!=='draft')this.tab='analysis';}}
+  reset(){this.generation=(this.generation||0)+1;this.xhr?.abort();this.packet=null;this.rows=[];this.tab='files';this.returnTab='files';this.source=null;this.profile='';this.error='';this.batch=false;this.summary='';this.filter='all';this.inspectorOpen=false;this.inspectorWide=false;}
+  async open(){this.error='';if(!this.getBoot().profiles[this.profile])this.profile=Object.keys(this.getBoot().profiles)[0]||'';const generation=this.generation,list=await this.api('/quick-checks');if(generation!==this.generation)return;this.packet=list[0]||null;if(this.packet){this.profile=this.packet.contractor;if(this.packet.status!=='draft')this.tab='analysis';}}
   async refresh(){
     if(!this.packet)return;
     const key=this.packet.id,generation=this.generation;
@@ -28,6 +28,7 @@ export class QuickUI {
   refs(items=[]){return items.map(s=>this.btn(this.esc(sourceLabel(s,this.packet?.files)),'quick-source',JSON.stringify(s),'source-link')).join('');}
   filesView(){
     const {esc,btn}=this,p=this.packet,editable=!p||p.status==='draft';
+    if(!p&&!Object.keys(this.getBoot().profiles).length)return `<div class="empty"><h2>Сначала добавьте организацию</h2><p>Создайте карточку подрядчика вручную или по ИНН. Документы разовой проверки не попадут в хранилище.</p>${btn('Создать организацию','new-organization','','primary')}</div>`;
     return `<div class="flow"><h2>Договор и приложения</h2><label>Подрядчик<select id="quick-contractor" ${p?'disabled':''}>${Object.entries(this.getBoot().profiles).map(([key,value])=>`<option value="${key}" ${key===this.profile?'selected':''}>${esc(value.name)}</option>`).join('')}</select></label>${editable?`<div class="dropzone" id="quick-dropzone"><strong>Перетащите пакет документов</strong><p>PDF, DOC, DOCX · можно несколько сразу</p>${btn('Выбрать файлы','quick-pick','','primary',this.batch)}<small>До 20 МБ на файл, 20 файлов и 100 МБ на пакет. Точные дубли исключаются.</small><input class="hidden" type="file" id="quick-file-picker" accept=".pdf,.doc,.docx" multiple></div>`:'<p class="muted">Состав зафиксирован для этой проверки. Для другого пакета начните новую разовую проверку.</p>'}${this.rows.filter(r=>r.status!=='done').map((row)=>`<div class="file-row"><span></span><div><strong>${esc(row.name)}</strong><p class="${row.status==='error'?'error':'muted'}">${esc(row.message)}</p>${row.status==='uploading'?`<progress aria-label="Загрузка ${esc(row.name)}" value="${row.progress||0}" max="100"></progress>`:''}</div>${row.status==='error'?btn('Убрать ошибку','quick-dismiss',row.id,'quiet'):''}</div>`).join('')}${p?.files.map(f=>`<div class="file-row"><span class="file-type">${esc(f.ext.toUpperCase())}</span><div><strong>${esc(f.name)}</strong><p><small>${f.status==='ready'?'Текст извлечён; оригинал удалён':'Не удалось прочитать'}</small></p>${f.extraction.warnings.map(w=>`<p class="${f.status==='error'?'error':'warning'}">${esc(w)}</p>`).join('')}${btn('Показать текст','quick-file',f.id,'quiet',f.status!=='ready')}</div>${editable?btn('Убрать','quick-remove',f.id,'quiet',this.batch):''}</div>`).join('')||''}${!this.getBoot().codex.connected?'<p class="warning">Общий Codex не подключён. Владелец приложения должен выполнить вход в настройках.</p>':''}</div>`;
   }
   leftView(tab=this.tab){
@@ -99,7 +100,7 @@ export class QuickUI {
     }
     if(action==='quick-summary'){
       const p=this.packet,result=p.review_result||p.primary_result;
-      this.summary=summaryText({result,meta:{title:'Разовая проверка договора',contractor:this.getBoot().profiles[p.contractor].name,created:this.date(p.created),reviewed:Boolean(p.review_result),temporary:true,files:p.files}});
+      this.summary=summaryText({result,meta:{title:'Разовая проверка договора',contractor:p.profile?.name||'Организация',created:this.date(p.created),reviewed:Boolean(p.review_result),temporary:true,files:p.files}});
     }
     if(action==='quick-summary-close')this.summary='';
     if(action==='quick-summary-copy'){
@@ -108,7 +109,7 @@ export class QuickUI {
       button.disabled=false;return;
     }
     if(action==='quick-export'){
-      const text=textReport(this.packet,this.getBoot().profiles[this.packet.contractor].name);
+      const text=textReport(this.packet,this.packet.profile?.name||'Организация');
       const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'})),link=document.createElement('a');
       link.href=url;link.download='Проверка договора.txt';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     }

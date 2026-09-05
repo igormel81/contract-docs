@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile, unlink, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink, rm, readdir } from 'node:fs/promises';
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { schema, reviewSchema, proposalSchema, validateResult, parseReview } from './schema.mjs';
 import { sharedInstruction, analystInstruction, reviewerInstruction, proposalInstruction } from './rules.mjs';
+import { organizationSchema, organizationInstruction, lookupResult } from './organizations.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
 import { resultSources, leanResult } from './sources.mjs';
@@ -26,6 +27,10 @@ export class CodexRunner {
     db.prepare("UPDATE analyses SET status='interrupted', error='Сервис перезапущен. Исход предыдущей попытки неизвестен; сохранённые результаты доступны.', updated=? WHERE status IN ('primary','review','queued')").run(now());
   }
   home() { return join(this.dir, 'codex', 'application'); }
+  async initLookup(runtime) {
+    this.lookupRoot=join(runtime,'organization-lookups');await mkdir(this.lookupRoot,{recursive:true,mode:0o700});
+    for(const entry of await readdir(this.lookupRoot,{withFileTypes:true}))if(entry.isDirectory()&&/^lookup-[a-f0-9-]{36}$/.test(entry.name))await rm(join(this.lookupRoot,entry.name),{recursive:true,force:true});
+  }
   env() { return { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', CODEX_HOME: this.home() }; }
   async status(canManage = false) {
     const epoch = this.authEpoch;
@@ -87,10 +92,11 @@ export class CodexRunner {
       originalAuth = await readFile(join(this.home(), 'auth.json'), 'utf8');
       await writeFile(join(isolatedHome, 'auth.json'), originalAuth, { mode: 0o600 });
     }
+    const lookup = stage === 'organization';
     const review = stage === 'review';
     const base = primary ? leanResult(primary) : null;
-    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(review ? reviewSchema : schema), { mode: 0o600 });
-    const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c','web_search="disabled"'];
+    const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(lookup ? organizationSchema : review ? reviewSchema : schema), { mode: 0o600 });
+    const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c',lookup ? 'web_search="live"' : 'web_search="disabled"'];
     for (const feature of disabled) args.push('--disable', feature);
     if (isolatedHome) args.push('-c', 'history.persistence="none"');
     args.push('-');
@@ -100,7 +106,7 @@ export class CodexRunner {
     const { profile, rules: ruleSet, instructionVersion: setVersion, kind, ...material } = snapshot;
     // Keep the frozen text and its edition; expiry can only lower confidence.
     if (material.legal) material.legal = { ...material.legal, status: legalStatus(material.legal) };
-    const prompt = `${sharedInstruction}\n${legalInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
+    const prompt = lookup ? `${organizationInstruction}\nДАННЫЕ ПОИСКА:\n${JSON.stringify({inn:snapshot.inn})}` : `${sharedInstruction}\n${legalInstruction}\nПРАВИЛА И ПРОФИЛЬ:\n${JSON.stringify({ kind, instructionVersion: setVersion, profile, rules: ruleSet })}\n${review ? reviewerInstruction : analystInstruction}\nДАННЫЕ КОМПЛЕКТА:\n${JSON.stringify(material)}\n${base ? 'РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n' + JSON.stringify(base) : ''}`;
     const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
     const startedAt = Date.now();
@@ -109,7 +115,7 @@ export class CodexRunner {
       const child = spawn(this.binary, args, { cwd, env, stdio: ['pipe','pipe','pipe'] });
       this.active = { child, user, analysis };
       let output = '', errorText = '', exceeded = false, timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; void stopChild(child); }, 12 * 60000); timer.unref();
+      const timer = setTimeout(() => { timedOut = true; void stopChild(child); }, (lookup ? 3 : 12) * 60000); timer.unref();
       child.stdout.on('data', chunk => { if(exceeded)return;output += chunk; if (output.length > 4 * 1024 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
       child.stderr.on('data', chunk => { errorText = (errorText + chunk).slice(-10000); });
       child.stdin.on('error', () => {}); child.stdin.end(prompt);
@@ -123,6 +129,8 @@ export class CodexRunner {
           if (events.some(e => e.type === 'turn.failed' || e.type === 'error')) throw new Error('Codex сообщил об ошибке этапа.');
           const messages = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message');
           const answer = JSON.parse(messages.at(-1)?.item.text || '{}');
+          if (!alive() || epoch !== this.authEpoch || this.closing) throw new Error('Запрос отменён.');
+          if(lookup)return resolve(lookupResult(answer,snapshot.inn,events));
           const result = resultSources(validateResult(review ? parseReview(base, answer) : answer, snapshot, stage),snapshot,context.temporary?null:analysis);
           const session = events.find(e => e.type === 'thread.started')?.thread_id ?? null;
           const usage = events.find(e => e.type === 'turn.completed')?.usage ?? null;
@@ -155,10 +163,11 @@ export class CodexRunner {
   // One clause, one wording, on request. Kept out of the analysis queue: it is short,
   // it belongs to a person waiting at the screen, and it must never displace a run.
   async proposal(request) {
-    if (!(await this.status()).connected) throw new HttpError(409, 'Общий Codex не подключён.');
-    if (this.busy || this.active) throw new HttpError(409, 'Сейчас выполняется анализ. Повторите, когда очередь освободится.');
+    if (this.busy || this.active || this.closing) throw new HttpError(409, 'Сейчас выполняется запрос Codex. Повторите, когда очередь освободится.');
+    this.busy=true;
     const cwd = join(this.dir, 'jobs', 'proposal-' + randomUUID());
     try {
+      if (!(await this.status()).connected) throw new HttpError(409, 'Общий Codex не подключён.');
       await mkdir(cwd, { recursive: true, mode: 0o700 });
       const schemaPath = join(cwd, 'schema.json');
       await writeFile(schemaPath, JSON.stringify(proposalSchema), { mode: 0o600 });
@@ -167,6 +176,7 @@ export class CodexRunner {
       args.push('-');
       return await new Promise((resolve, reject) => {
         const child = spawn(this.binary, args, { cwd, env: this.env(), stdio: ['pipe','pipe','pipe'] });
+        this.active={child,user:null,analysis:'proposal'};
         let output = '', errorText = '', exceeded = false;
         const timer = setTimeout(() => void stopChild(child), 3 * 60000); timer.unref();
         child.stdout.on('data', chunk => { if (exceeded) return; output += chunk; if (output.length > 512 * 1024) { exceeded = true; output = ''; void stopChild(child); } });
@@ -174,7 +184,7 @@ export class CodexRunner {
         child.stdin.on('error', () => {}); child.stdin.end(`${proposalInstruction}\n${legalInstruction}\nДАННЫЕ:\n${JSON.stringify(request)}`);
         child.on('error', () => { clearTimeout(timer); reject(new HttpError(503, 'Исполнитель Codex недоступен.')); });
         child.on('close', code => {
-          clearTimeout(timer);
+          clearTimeout(timer);this.active=null;
           if (exceeded || code !== 0) return reject(new HttpError(503, /limit|quota|usage/i.test(errorText + output) ? 'Лимит Codex. Повторите позже.' : 'Не удалось получить формулировку. Повторите позже.'));
           try {
             const events = output.split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -185,7 +195,13 @@ export class CodexRunner {
           } catch { reject(new HttpError(503, 'Ответ исполнителя не удалось разобрать. Повторите позже.')); }
         });
       });
-    } finally { await rm(cwd, { recursive: true, force: true }); }
+    } finally { try{await rm(cwd, { recursive: true, force: true });}finally{this.busy=false;} }
+  }
+  async organizationLookup(user, job, inn, alive) {
+    if(this.busy||this.active||this.closing)throw new HttpError(409,'Codex занят. Повторите позже или заполните вручную.');
+    this.busy=true;
+    try{return await this.execute(user,job,{inn},'organization',null,{temporary:true,directory:join(this.lookupRoot,'lookup-'+job),alive});}
+    finally{this.busy=false;}
   }
   async tick() {
     if (this.busy || this.closing) return; this.busy = true;

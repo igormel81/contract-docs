@@ -22,6 +22,21 @@ if sys.argv[1] == 'login':
 assert json.loads((authdir / 'auth.json').read_text())['tokens']['access_token'] == 'fake-test-only'
 
 prompt = sys.stdin.read()
+if 'ДАННЫЕ ПОИСКА:' in prompt:
+    request = json.loads(prompt.split('ДАННЫЕ ПОИСКА:\n', 1)[1])
+    assert set(request) == {'inn'}, 'Only the public tax ID may leave the application'
+    assert 'web_search="live"' in sys.argv
+    for feature in ['shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'computer_use']:
+        assert feature in sys.argv
+    keys = ['name','legalName','inn','ogrn','kpp','address','base','website','capabilities','claimed','unverified']
+    answer = {key:'' for key in keys}
+    answer.update({'inn':request['inn'],'name':'Организация из тестового поиска','address':'Тестовый адрес','note':'Синтетический результат, не выписка реестра.',
+      'sources':[{'field':'name','url':'https://egrul.nalog.ru/','title':'Тестовый источник','quote':request['inn']+' Организация из тестового поиска'},
+                 {'field':'address','url':'https://egrul.nalog.ru/','title':'Тестовый источник','quote':'Тестовый адрес'}]})
+    print(json.dumps({'type':'item.completed','item':{'type':'web_search','query':request['inn']}}))
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(answer)}}))
+    print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))
+    sys.exit(0)
 if 'ДАННЫЕ КОМПЛЕКТА:' not in prompt:
     # Wording for a single clause, requested from the interface.
     request = json.loads(prompt.split('ДАННЫЕ:\n', 1)[1])

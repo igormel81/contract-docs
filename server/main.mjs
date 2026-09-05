@@ -7,8 +7,9 @@ import { realpathSync } from 'node:fs';
 import { database, id, now, tx, audit } from './db.mjs';
 import { HttpError, required, choice, hash, token, passwordHash, passwordMatches, limit, body, jsonBody } from './security.mjs';
 import { format, extract, similarity } from './documents.mjs';
-import { profiles, rules, instructionVersion } from './rules.mjs';
+import { rules, instructionVersion } from './rules.mjs';
 import { CodexRunner } from './codex.mjs';
+import { Organizations, validInn } from './organizations.mjs';
 import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
 import { findingKey } from '../public/document-ui.js';
@@ -32,10 +33,12 @@ export async function createApp(options = {}) {
   }
   const runner = new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
   const runtime = options.runtime || process.env.DOCS_RUNTIME || await mkdtemp(join(tmpdir(),'contract-docs-runtime-'));
-  const quick = new QuickChecks(runner,runtime,sandbox,options.quick); await quick.init();
+  const organizations = new Organizations(db), lookups = new Map();
+  await runner.initLookup(runtime);
+  const quick = new QuickChecks(runner,runtime,sandbox,{...options.quick,organizations}); await quick.init();
   const dummyHash = await passwordHash(token());
   const timer = options.autoTick === false ? null : setInterval(() => runner.tick().catch(() => {}), 2000); timer?.unref();
-  const cleanupTimer=setInterval(()=>quick.sweep().catch(()=>console.error('temporary cleanup failed')),30000);cleanupTimer.unref();
+  const cleanupTimer=setInterval(()=>{quick.sweep().catch(()=>console.error('temporary cleanup failed'));for(const [key,job] of lookups)if(job.expires<Date.now())lookups.delete(key);},30000);cleanupTimer.unref();
   let uploading = 0;
   quick.persistedUploads=()=>uploading;
   function send(res, status, data) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); }
@@ -85,9 +88,9 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.2.2' });
+    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.3.0' });
     if (await servePublication(req,res,path,root)) return;
-    const publicFiles = { '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
+    const publicFiles = { '/docs/organizations.js':['organizations.js','text/javascript'], '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
       const [name, type] = publicFiles[path]; const content = await readFile(join(root, 'public', name));
       res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }); return res.end(content);
@@ -130,9 +133,43 @@ export async function createApp(options = {}) {
     if (path === '/docs/api/bootstrap' && req.method === 'GET') return send(res,200,{
       customers: db.prepare('SELECT * FROM customers WHERE user_id=? ORDER BY name').all(user.id),
       contracts: db.prepare('SELECT c.*, (SELECT COUNT(*) FROM revisions r WHERE r.contract_id=c.id) revision_count FROM contracts c WHERE user_id=? ORDER BY created DESC').all(user.id),
-      profiles, rules: withLegalContext({rules}).rules, legal: legalCatalog(), codex: await runner.status(canManageCodex(user))
+      profiles: organizations.profiles(user.id), organizations: organizations.list(user.id), rules: withLegalContext({rules}).rules, legal: legalCatalog(), codex: await runner.status(canManageCodex(user))
     });
     if (path === '/docs/api/legal-base' && req.method === 'GET') return send(res,200,legalCatalog());
+    for(const [key,job] of lookups)if(job.expires<Date.now())lookups.delete(key);
+    if(path==='/docs/api/organizations/lookup'&&req.method==='POST'){
+      const input=await jsonBody(req),inn=String(input.inn||'').trim();
+      if(!validInn(inn))throw new HttpError(400,'Проверьте ИНН: нужны 10 или 12 цифр с корректными контрольными разрядами.');
+      if(runner.busy||runner.active)throw new HttpError(409,'Сейчас выполняется запрос Codex. Дождитесь завершения или заполните карточку вручную.');
+      if(!(await runner.status()).connected)throw new HttpError(409,'Общий Codex не подключён. Заполните вручную или обратитесь к владельцу приложения.');
+      limit(db,`organization-lookup:${user.id}`,6,3600000);
+      const job={id:id(),user:user.id,inn,status:'running',expires:Date.now()+15*60000};lookups.set(job.id,job);
+      runner.organizationLookup(user.id,job.id,inn,()=>job.status==='running'&&job.expires>Date.now()).then(result=>{if(job.status==='running'){job.status='complete';job.result=result;}}).catch(e=>{if(job.status==='running'){job.status='error';job.error=e.message;}});
+      return send(res,202,{id:job.id,status:job.status});
+    }
+    const lookupMatch=path.match(/^\/docs\/api\/organizations\/lookup\/([\w-]+)$/);
+    if(lookupMatch){
+      const job=lookups.get(lookupMatch[1]);if(!job||job.user!==user.id)throw new HttpError(404,'Поиск не найден или срок черновика истёк. Повторите поиск либо заполните вручную.');
+      if(req.method==='POST'){job.status='cancelled';await runner.cancel(user.id,job.id);return send(res,200,{status:job.status});}
+      if(req.method==='GET')return send(res,200,{id:job.id,status:job.status,result:job.result,error:job.error});
+    }
+    if(path==='/docs/api/organizations'){
+      if(req.method==='GET')return send(res,200,organizations.list(user.id));
+      if(req.method==='POST'){
+        const input=await jsonBody(req),job=input.lookupId?lookups.get(input.lookupId):null;
+        if(input.lookupId&&(!job||job.user!==user.id||job.status!=='complete'||job.inn!==String(input.inn||'').trim()))throw new HttpError(400,'Результат поиска не соответствует карточке. Повторите поиск или сохраните вручную.');
+        const org=organizations.save(user.id,input,null,job?.result);audit(db,user.id,null,'Создана организация',org.id);return send(res,201,org);
+      }
+    }
+    const orgMatch=path.match(/^\/docs\/api\/organizations\/([\w-]+)$/);
+    if(orgMatch){
+      if(req.method==='GET')return send(res,200,organizations.own(user.id,orgMatch[1]));
+      if(req.method==='PATCH'){
+        const input=await jsonBody(req),job=input.lookupId?lookups.get(input.lookupId):null;
+        if(input.lookupId&&(!job||job.user!==user.id||job.status!=='complete'||job.inn!==String(input.inn||'').trim()))throw new HttpError(400,'Результат поиска не соответствует карточке. Повторите поиск или сохраните вручную.');
+        const org=organizations.save(user.id,input,orgMatch[1],job?.result);audit(db,user.id,null,'Обновлена организация',org.id);return send(res,200,org);
+      }
+    }
     if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await runner.status(canManageCodex(user)));
     if (path === '/docs/api/codex/login' && req.method === 'POST') {
       requireCodexAdmin(user); limit(db,'codex-login:application',5,3600000);
@@ -177,7 +214,7 @@ export async function createApp(options = {}) {
     if (path === '/docs/api/contracts' && req.method === 'POST') {
       const input = await jsonBody(req); const kind = choice(input.kind || 'contract',['contract','template']);
       const customer = kind === 'contract' ? owned('customers',required(input.customer_id),user.id).id : null;
-      const key = id(); db.prepare('INSERT INTO contracts(id,user_id,customer_id,title,contractor,kind,created) VALUES(?,?,?,?,?,?,?)').run(key,user.id,customer,required(input.title,200),choice(input.contractor,Object.keys(profiles)),kind,now());
+      const key = id(); db.prepare('INSERT INTO contracts(id,user_id,customer_id,title,contractor,kind,created) VALUES(?,?,?,?,?,?,?)').run(key,user.id,customer,required(input.title,200),organizations.own(user.id,input.contractor,{active:true}).id,kind,now());
       audit(db,user.id,key,kind === 'template' ? 'Создан шаблон' : 'Создан договор'); return send(res,201,{id:key});
     }
     let match = path.match(/^\/docs\/api\/contracts\/([\w-]+)(?:\/(files|revisions|analyses|risks|effective|compare|dismissed))?$/);
@@ -195,6 +232,11 @@ export async function createApp(options = {}) {
       });
       if (!action && req.method === 'PATCH') {
         const input = await jsonBody(req);
+        if(input.contractor!==undefined){
+          const org=organizations.own(user.id,input.contractor,{active:true});
+          tx(db,()=>{db.prepare('UPDATE contracts SET contractor=? WHERE id=?').run(org.id,contract.id);audit(db,user.id,contract.id,'Выбрана организация для новых анализов',org.id);});
+          return send(res,200,{ok:true});
+        }
         if (input.manager !== undefined) {
           const manager=String(input.manager||'').trim().slice(0,200);
           tx(db,()=>{db.prepare('UPDATE contracts SET manager=? WHERE id=?').run(manager||null,contract.id);audit(db,user.id,contract.id,'Указан ответственный за договор',manager||'не указан');});
@@ -259,11 +301,12 @@ export async function createApp(options = {}) {
         // Подрядчика выбирают руками, и ошибка в списке разворачивает весь анализ не в ту
         // сторону. Проверяем по ИНН: это подсказка человеку и модели, а не запрет.
         const plain=documents.flatMap(f=>f.blocks.map(b=>b.text)).join(' ').replace(/[^0-9]+/g,' ');
-        const mine=profiles[contract.contractor].inn, other=Object.values(profiles).map(p=>p.inn).filter(inn=>inn!==mine);
-        const sideNote=plain.includes(mine)?null:other.find(inn=>plain.includes(inn))
+        const profile=organizations.snapshot(user.id,contract.contractor);
+        const mine=profile.inn, other=Object.values(organizations.profiles(user.id)).map(p=>p.inn).filter(inn=>inn&&inn!==mine);
+        const sideNote=mine&&plain.includes(mine)?null:other.find(inn=>plain.includes(inn))
           ?'ИНН выбранного подрядчика в тексте не найден, зато найден ИНН другого профиля. Проверьте, та ли сторона выбрана; вывод об интересах стороны сделай с этой оговоркой.'
           :'ИНН выбранного подрядчика в тексте не найден. Возможно, реквизиты не извлеклись или выбрана не та сторона: отрази это в ограничениях.';
-        const snapshot=withLegalContext({revisionId:rev.id,version:rev.number,kind:contract.kind,profile:profiles[contract.contractor],contractorNote:sideNote,rules,instructionVersion,documents,created:now()});
+        const snapshot=withLegalContext({revisionId:rev.id,version:rev.number,kind:contract.kind,profile,contractorNote:sideNote,rules,instructionVersion,documents,created:now()});
         const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),now(),now());
         audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}${sideNote?'; '+sideNote:''}`); return send(res,202,{id:key,note:sideNote});
       }
@@ -330,7 +373,7 @@ export async function createApp(options = {}) {
         const snapshot=parse(analysis.snapshot), full=url.searchParams.get('scope')==='full';
         const text=summaryText({full,result:resultSources(stored,snapshot,analysis.id),meta:{
           title:card.title, customer:card.customer_id?db.prepare('SELECT name FROM customers WHERE id=?').get(card.customer_id)?.name:null,
-          contractor:profiles[card.contractor].name, manager:card.manager||null,
+          contractor:snapshot?.profile?.name||organizations.list(user.id).find(p=>p.id===card.contractor)?.name||'Организация не выбрана', manager:card.manager||null,
           revision:db.prepare('SELECT number FROM revisions WHERE id=?').get(analysis.revision_id)?.number,
           created:new Date(analysis.created).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'}),
           reviewed:Boolean(analysis.review_result), link:`${origin}/docs/#${card.id}`, files:snapshot.documents}});

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { schema } from '../server/schema.mjs';
-import { rules, profiles, sharedInstruction, analystInstruction, instructionVersion } from '../server/rules.mjs';
+import { rules, sharedInstruction, analystInstruction, instructionVersion } from '../server/rules.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const data = resolve(process.env.DOCS_DATA || join(root, 'data'));
@@ -62,7 +62,7 @@ for (const name of files) {
   for (const [index, item] of fixture.cases.entries()) {
     let verdict, note = '';
     try {
-      const { result, usage, ms } = await ask(item.text, profiles.custis);
+      const { result, usage, ms } = await ask(item.text, {name:'Синтетический исполнитель проверки правил',base:'Москва',unverified:'Лицензии и ресурсы требуют подтверждения.'});
       const fired = result.findings.some(f => f.rule === fixture.rule);
       const others = [...new Set(result.findings.filter(f => f.rule !== fixture.rule).map(f => f.rule))];
       verdict = fired ? 'finding' : others.length ? `другое правило: ${others.join(', ')}` : 'no_finding';

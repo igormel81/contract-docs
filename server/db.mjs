@@ -12,6 +12,8 @@ export function database(dir) {
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, login TEXT UNIQUE NOT NULL, password TEXT NOT NULL, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS customers(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), name TEXT NOT NULL, inn TEXT NOT NULL, created TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS organizations(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, inn TEXT NOT NULL, data TEXT NOT NULL, version INTEGER NOT NULL, archived INTEGER NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS organizations_user_inn ON organizations(user_id,inn) WHERE inn!='';
     CREATE TABLE IF NOT EXISTS contracts(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), customer_id TEXT REFERENCES customers(id), title TEXT NOT NULL, contractor TEXT NOT NULL, kind TEXT NOT NULL, stage TEXT NOT NULL DEFAULT 'Подготовка', effective_id TEXT, created TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), contract_id TEXT REFERENCES contracts(id), name TEXT NOT NULL, ext TEXT NOT NULL, hash TEXT NOT NULL, size INTEGER NOT NULL, extraction TEXT, status TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(contract_id,hash));
     CREATE TABLE IF NOT EXISTS revisions(id TEXT PRIMARY KEY, contract_id TEXT REFERENCES contracts(id), number INTEGER NOT NULL, parent_id TEXT, file_ids TEXT NOT NULL, note TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(contract_id,number));
