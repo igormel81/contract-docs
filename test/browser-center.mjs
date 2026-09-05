@@ -26,6 +26,82 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   }
   browser=await puppeteer.launch({executablePath:process.env.CHROME_BIN,headless:true});
   const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.setViewport({width:1440,height:900});
+  const inputSession=await page.createCDPSession();
+  async function controlsViewport(width){
+    await page.setViewport({width,height:900});
+    // Toggle touch without Puppeteer's automatic hasTouch reload: a reload would
+    // invalidate the draft-preservation and in-place disclosure assertions.
+    await inputSession.send('Emulation.setTouchEmulationEnabled',{enabled:width<=768});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  }
+  async function revealControl(selector){
+    const visible=()=>page.$eval(selector,el=>el.checkVisibility());
+    if(await visible())return;
+    // Exercise disclosure controls as a user, never force hidden elements open.
+    const menu=await page.$eval(selector,el=>{let parent=el.closest('details[data-menu]');if(parent?.querySelector(':scope>summary')===el)parent=parent.parentElement?.closest('details[data-menu]');return parent?.dataset.menu;});
+    if(menu){await revealControl(`details[data-menu="${menu}"]>summary`);await page.click(`details[data-menu="${menu}"]>summary`);return;}
+    if(await page.$('[data-action=nav-toggle]'))await page.click('[data-action=nav-toggle]');
+    assert.ok(await visible(),`Control is reachable: ${selector}`);
+  }
+  async function clickControl(selector){await revealControl(selector);await page.click(selector);}
+  async function assertControlsLayout(surface,{contract=false}={}){
+    for(const width of [320,375,390,768,1440]){
+      await controlsViewport(width);
+      const measurement=await page.evaluate(()=>{
+        const rect=el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+        const context=document.querySelector('#main>.context');
+        const heading=context?.querySelector('h1'),primary=context?.querySelector('[data-action=analyze],[data-action=quick-run]'),revision=context?.querySelector('#revision-select');
+        const overlap=(a,b)=>a&&b&&Math.min(a.right,b.right)>Math.max(a.x,b.x)+1&&Math.min(a.bottom,b.bottom)>Math.max(a.y,b.y)+1;
+        const mainButtons=[...document.querySelectorAll('#main button,#main select,#main summary,.topbar button,.topbar summary')].filter(el=>el.checkVisibility()&&!el.closest('.contract-text')&&!el.classList.contains('source-link'));
+        return {overflow:document.documentElement.scrollWidth>innerWidth+1,topbar:rect(document.querySelector('.topbar')),heading:heading&&rect(heading),overlap:overlap(heading&&rect(heading),primary&&rect(primary))||overlap(heading&&rect(heading),revision&&rect(revision)),
+          targets:mainButtons.map(el=>({action:el.dataset.action||el.tagName,label:el.textContent.trim().slice(0,80),...rect(el),font:parseFloat(getComputedStyle(el).fontSize)}))};
+      });
+      assert.equal(measurement.overflow,false,`${surface} ${width}: page overflow`);
+      assert.equal(Boolean(measurement.overlap),false,`${surface} ${width}: header overlap`);
+      if(width<=768){
+        assert.ok(measurement.topbar.height<=64,`${surface} ${width}: compact header ${measurement.topbar.height}`);
+        assert.ok(await page.$eval('#catalog-drawer',el=>!el.checkVisibility()),'Closed catalogue consumes no screen space');
+        for(const target of measurement.targets){
+          assert.ok(target.height>=43.9&&target.width>=43.9,`${surface} ${width}: small touch target ${JSON.stringify(target)}`);
+          assert.ok(target.font>=14,`${surface} ${width}: small control label ${JSON.stringify(target)}`);
+        }
+      }
+      if(contract&&width<=390){
+        const tabs=await page.$$eval('nav.tabs [data-action=tab]',els=>els.filter(el=>el.checkVisibility()).map(el=>el.dataset.value));
+        assert.deepEqual(tabs,['passport','analysis','document'],'Mobile keeps three principal sections visible');
+        for(const value of ['set','risks','history']){
+          await clickControl(`[data-action=tab][data-value=${value}]`);
+          assert.equal(await page.$eval('details[data-menu=sections]>summary',el=>el.getAttribute('aria-current')),'page','More marks its active section');
+          assert.equal(await page.$eval('details[data-menu=sections]',el=>el.open),false,'Choosing a section closes the menu');
+        }
+        await page.click('[data-action=tab][data-value=passport]');
+      }
+      await page.screenshot({path:join(screenshotDir,`controls-${surface}-${width}.png`),fullPage:true});
+    }
+    await controlsViewport(375);
+    await page.click('[data-action=nav-toggle]');
+    await page.waitForFunction(()=>document.querySelector('#catalog-drawer')?.getAttribute('aria-modal')==='true');
+    assert.equal(await page.$eval('#catalog-drawer',el=>el.getAttribute('role')),'dialog');
+    assert.ok(await page.$eval('#catalog-drawer',el=>el.contains(document.activeElement)),'Opening drawer moves focus inside');
+    // A dialog keeps keyboard focus inside, including at the boundary.
+    await page.$eval('#catalog-drawer',el=>[...el.querySelectorAll('button:not(:disabled),input,select,a[href],summary')].filter(x=>x.checkVisibility()).at(-1).focus());
+    await page.keyboard.press('Tab');
+    assert.ok(await page.$eval('#catalog-drawer',el=>el.contains(document.activeElement)),'Drawer traps forward Tab');
+    await page.keyboard.press('Escape');
+    assert.ok(await page.$eval('[data-action=nav-toggle]',el=>el===document.activeElement),'Escape restores menu trigger focus');
+    for(const menu of ['account','about']){
+      const selector=`details[data-menu=${menu}]>summary`;
+      await revealControl(selector);await page.focus(selector);await page.keyboard.press('Enter');
+      assert.equal(await page.$eval(`details[data-menu=${menu}]`,el=>el.open),true);
+      await page.keyboard.press('Escape');
+      assert.ok(await page.$eval(selector,el=>el===document.activeElement));
+      assert.equal(await page.$eval(`details[data-menu=${menu}]`,el=>el.open),false);
+      // About can live inside the catalogue on mobile.
+      if(await page.$eval('#catalog-drawer',el=>el.checkVisibility()))await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+    }
+    await controlsViewport(1440);
+  }
   async function assertNeutralInterface(){
     const copy=await page.evaluate(()=>{
       const clone=document.body.cloneNode(true);
@@ -43,12 +119,14 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
       await page.setViewport({width,height:900});
       const selector='a[href="https://github.com/igormel81/contract-docs"]';
       assert.equal(await page.$$eval(selector,els=>els.length),1);
+      await revealControl(selector);
       await page.keyboard.press('Tab');
       await page.focus(selector);
       const link=await page.$eval(selector,el=>({target:el.target,rel:el.rel,label:el.getAttribute('aria-label'),height:el.getBoundingClientRect().height,focus:el.matches(':focus-visible'),outline:getComputedStyle(el).outlineStyle}));
       assert.equal(link.target,'_blank');assert.match(link.rel,/noopener/);assert.match(link.rel,/noreferrer/);assert.match(link.label,/новая вкладка/);assert.ok(link.height>=44);assert.ok(link.focus);assert.notEqual(link.outline,'none');
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       await page.screenshot({path:join(screenshotDir,`repository-${surface}-${width}.png`),fullPage:true});
+      await page.keyboard.press('Escape');await page.keyboard.press('Escape');
     }
     await page.setViewport({width:1440,height:900});
   }
@@ -88,7 +166,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('[data-form=organization] [type=submit]');await page.waitForSelector('[data-action=edit-organization]');
   const orgs=await page.evaluate(async()=>await (await fetch('/docs/api/organizations')).json());
   const orgA=orgs.find(o=>o.name==='Исполнитель А').id,orgB=orgs.find(o=>o.name==='Исполнитель Б').id;
-  await page.click('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
+  await clickControl('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
   await page.setViewport({width:375,height:900});
   assert.ok(await page.$eval('[data-action=quick-pick]',el=>el.getBoundingClientRect().bottom<innerHeight),'Mobile upload action fits the first screen');
   assert.equal(await page.$eval('aside.inspector',el=>getComputedStyle(el).display),'none','No empty inspector takes upload space');
@@ -104,6 +182,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('дубль'));
   assert.equal(await page.$$eval('[data-action=quick-file]',els=>els.length),2);
   assert.equal([...app.quick.items.values()][0].contractor,orgB);
+  await assertControlsLayout('quick-upload');
   for(const width of [1440,768,375]){
     await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));
     assert.ok(s.sw<=s.w+1,JSON.stringify(s));if(width===1440)assert.ok(s.sh<=s.h+1,JSON.stringify(s));
@@ -148,7 +227,10 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.screenshot({path:join(screenshotDir,'center-quick-1440.png'),fullPage:true});
   await page.reload({waitUntil:'networkidle0'});await page.waitForSelector('[data-action=quick-export]');
   await page.click('[data-action=stored]');assert.equal(app.db.prepare('SELECT count(*) n FROM contracts').get().n,0);
-  await page.click('[data-action=quick-open]');await page.waitForSelector('[data-action=quick-discard]');page.once('dialog',d=>d.accept());await page.click('[data-action=quick-discard]');await page.waitForFunction(()=>!document.querySelector('[data-action=quick-discard]'));
+  await page.click('[data-action=quick-open]');await page.waitForSelector('[data-action=quick-discard]');
+  page.once('dialog',d=>d.dismiss());await clickControl('[data-action=quick-discard]');
+  assert.equal(app.quick.items.size,1,'Cancelling deletion preserves the temporary package');
+  page.once('dialog',d=>d.accept());await clickControl('[data-action=quick-discard]');await page.waitForFunction(()=>!document.querySelector('[data-action=quick-discard]'));
   assert.equal(app.quick.items.size,0);assert.deepEqual(await readdir(app.quick.root),[]);assert.deepEqual(errors,[]);
   const encoded=(await readFile(join(root,'Договор.docx'))).toString('base64');
   const stored=await page.evaluate(async encoded=>{
@@ -167,6 +249,7 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.match(await page.$eval('[name=contractor]',el=>el.textContent),/Исполнитель Б/);
   await assertNeutralInterface();
   await page.click('[data-action=cancel-form]');
+  await assertControlsLayout('saved-passport',{contract:true});
   const originalCount=app.db.prepare('SELECT count(*) n FROM analyses').get().n;
   await page.click('[data-action=tab][data-value=analysis]');
   await page.waitForSelector('section.panel [data-form=recommendation]');
@@ -175,6 +258,13 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('.finding-disclosure>summary');
   await page.$eval('[data-form=recommendation] textarea',el=>{el.value='Уточнить оплату по п. 6.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.select('[data-form=recommendation] select','planned');
+  await assertControlsLayout('expanded-analysis');
+  await controlsViewport(375);
+  await page.click('[data-action=nav-toggle]');await page.keyboard.press('Escape');
+  await page.click('details[data-menu=sections]>summary');await page.keyboard.press('Escape');
+  assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2','Menus preserve the unsaved wording');
+  assert.equal(await page.$eval('[data-form=recommendation] select',el=>el.value),'planned','Menus preserve the unsaved decision');
+  await controlsViewport(1440);
   // Черновик рекомендации переживает переключение разделов в одном меню.
   await page.click('[data-action=tab][data-value=passport]');
   await page.waitForSelector('.passport-compact');
@@ -227,7 +317,8 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   assert.equal(await page.$$eval('[data-action=tab]',els=>els.length),6,'Six sections, upload and revisions merged');
   await page.screenshot({path:join(screenshotDir,'center-set-1440.png'),fullPage:true});
   await page.click('[data-action=tab][data-value=risks]');await page.waitForFunction(()=>document.body.textContent.includes('Кандидаты из анализа'));
-  assert.match(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent),/Риски · кандидаты 1/,'The menu explicitly counts candidates, not registered risks');
+  assert.equal(await page.$eval('[data-action=tab][data-value=risks]',el=>el.textContent.trim()),'Риски','Candidate count does not stretch the section menu');
+  assert.match(await page.$eval('section.panel .content',el=>el.textContent),/Кандидаты из анализа v1 · 1/,'Candidates are counted inside Risks, separately from the registry');
   for(const width of [1440,375]){await page.setViewport({width,height:900});await page.screenshot({path:join(screenshotDir,`center-candidates-${width}.png`),fullPage:true});}
   await page.setViewport({width:1440,height:900});
   await page.click('section.panel [data-action=finding-risk]');await page.waitForSelector('[data-form=risk]');
@@ -282,9 +373,44 @@ sys.stdout.buffer.write(b.getvalue())`,'6.2. '+('Работы выполняют
   await page.click('[data-form=revision] button[value=analyze]');
   await page.waitForFunction(()=>document.querySelector('[data-action=tab][data-value=analysis]').getAttribute('aria-current')==='page'&&document.body.textContent.includes('В очереди'));
   assert.equal(app.db.prepare('SELECT count(*) n FROM revisions').get().n,revisionsBefore+1);assert.equal(app.db.prepare('SELECT count(*) n FROM analyses').get().n,analysesBefore+1);
+  await page.click('details[data-menu=account]>summary');
+  await page.focus('details[data-menu=account]>summary');
+  await page.waitForResponse(response=>response.url().endsWith('/api/contracts/'+stored),{timeout:10000});
+  await page.waitForNetworkIdle({idleTime:100,timeout:2000});
+  assert.ok(await page.$eval('details[data-menu=account]>summary',el=>el===document.activeElement),'Polling keeps keyboard focus on the same control');
+  assert.equal(await page.$eval('details[data-menu=account]',el=>el.open),true,'Polling preserves an open account menu and keyboard focus');
+  await page.keyboard.press('Escape');
+  await assertControlsLayout('queued-analysis');
+  const longTitle='Договор на внедрение и сопровождение информационной системы распределённых подразделений заказчика с дополнительными требованиями к приёмке и передаче результатов — '+ 'А'.repeat(35);
+  const longOrg='Исполнитель с длинным названием для проверки переноса и доступности карточки организации — '+ 'Б'.repeat(90);
+  const longContract=await page.evaluate(async({encoded,longTitle,longOrg})=>{
+    async function post(path,data){const response=await fetch('/docs/api'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Docs-Request':'1'},body:JSON.stringify(data)});if(!response.ok)throw Error(await response.text());return response.json();}
+    const organization=await post('/organizations',{name:longOrg});
+    const customer=await post('/customers',{name:'Заказчик с длинным названием и региональными подразделениями для проверки адаптивности интерфейса'});
+    const contract=await post('/contracts',{title:longTitle,contractor:organization.id,customer_id:customer.id});
+    const response=await fetch('/docs/api/contracts/'+contract.id+'/files',{method:'POST',headers:{'X-Docs-Request':'1','X-File-Name':'long-contract.docx'},body:Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))});
+    if(!response.ok)throw Error(await response.text());const file=await response.json();
+    await post('/contracts/'+contract.id+'/revisions',{file_ids:[file.file.id],note:'Проверка длинного заголовка'});return contract.id;
+  },{encoded,longTitle,longOrg});
+  await page.goto('http://127.0.0.1:3119/docs/#'+longContract,{waitUntil:'networkidle0'});await page.reload({waitUntil:'networkidle0'});
+  await page.waitForSelector('#revision-select');
+  assert.equal(await page.$eval('#main>.context h1',el=>el.textContent),longTitle);
+  assert.ok((await page.$eval('.contract-organization',el=>el.textContent)).includes(longOrg));
+  await assertControlsLayout('long-names',{contract:true});
+  // Reflow equivalent to a 1440px desktop at 200% browser zoom: 720 CSS px.
+  // This is not a pinch-zoom test or a claim about physical device rendering.
+  await page.setViewport({width:720,height:450,deviceScaleFactor:2,isMobile:false,hasTouch:false});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'200% equivalent reflow has no horizontal page overflow');
+  assert.ok(await page.$eval('#main>.context h1',el=>el.scrollWidth<=el.clientWidth+1),'Long title wraps without clipping at 200% equivalent reflow');
+  await page.screenshot({path:join(screenshotDir,'controls-reflow-200.png'),fullPage:true});
   assert.deepEqual(errors,[]);
+  console.log('PASS controls: 320/375/390/768/1440; touch targets; long names; 200% equivalent reflow; drawers, menus, focus, mobile tabs, cancellation and drafts.');
   console.log('PASS center and side layouts: saved/quick, source links, draft preservation, saving decisions, same run, keyboard focus, 1440/768/375.');
   console.log('PASS neutral login, header, catalogue and contract context; both contractor choices preserved.');
   console.log('PASS compact passport, original clause links, saved risk with frozen revision and source.');
   console.log('PASS quick UI: batch, dedup, contractor, two stages, source, export, refresh, delete, empty catalogue, responsive 1440/768/375.');
+}catch(error){
+  const page=(await browser?.pages())?.at(-1);
+  if(page){await page.screenshot({path:join(screenshotDir,'controls-failure.png'),fullPage:true});console.error((await page.$eval('body',el=>el.innerText)).slice(0,5000));}
+  throw error;
 }finally{await browser?.close();await app.close();await rm(root,{recursive:true,force:true});}

@@ -126,5 +126,101 @@ details>summary{cursor:pointer;padding-block:5px;min-height:32px}
   .promo-benefits{gap:12px}
   .promo-benefits span{font-size:14px}
   .login-box{padding:28px 24px;place-content:initial;justify-items:center}
-  .login-box .form{max-width:400px}
+.login-box .form{max-width:400px}
+}
+
+/* Shared controls: compact with a mouse, generous on phones and touch tablets. */
+:root{--control-font:14px;--control-height:38px;--control-pad:8px 10px;--control-gap:8px;--icon-size:20px;--menu-shadow:0 8px 24px #24282124}
+:is(button,.compact-action,.tabs button,.nav button,.context select,.queue-row select,.finding .source-link){font-size:var(--control-font);min-height:var(--control-height)}
+button{padding:var(--control-pad);max-width:100%;white-space:nowrap}
+select{font-size:var(--control-font);min-height:var(--control-height)}
+summary,.clause-comparison>summary{font-size:var(--control-font)}
+.source-link,.finding .source-link{white-space:normal;overflow-wrap:anywhere;text-align:left}
+.catalog button{white-space:normal}
+.catalog strong{font-size:var(--control-font)}
+.catalog-create{display:flex;flex-wrap:wrap;gap:var(--control-gap)}
+.catalog-create button{flex:auto}
+.decision-actions{display:flex;flex-wrap:wrap;gap:var(--control-gap);align-items:center}
+.ui-icon{width:var(--icon-size);height:var(--icon-size);flex:none;vertical-align:middle}
+.icon-button{position:relative;display:inline-flex;align-items:center;justify-content:center;width:var(--control-height);min-width:var(--control-height);padding:8px}
+.control-tooltip{position:absolute;inset-block-start:calc(100% + 6px);inset-inline-end:0;width:max-content;max-width:220px;padding:6px 8px;background:var(--ink);color:var(--surface);border-radius:var(--radius);font-size:12px;line-height:1.4;white-space:normal;z-index:60;display:none;pointer-events:none}
+:is(.icon-button,.control-menu>summary):is(:hover,:focus-visible)>.control-tooltip{display:block}
+.topbar{position:relative;z-index:10}
+.topbar .brand{min-width:0;margin-inline-end:auto}
+.topbar .brand .mark{flex:none}
+.mobile-nav,.mobile-back,.drawer-heading,.drawer-backdrop{display:none}
+.control-menu{position:relative;margin:0;min-width:0}
+.control-menu>summary{display:flex;gap:6px;align-items:center;justify-content:center;cursor:pointer;list-style:none;min-height:var(--control-height);min-width:var(--control-height);padding:var(--control-pad);border-radius:var(--radius);font-size:var(--control-font);white-space:nowrap}
+.control-menu>summary::-webkit-details-marker{display:none}
+.control-menu>summary:hover,.control-menu[open]>summary{background:var(--accent-bg)}
+.menu-popover{position:absolute;inset-block-start:calc(100% + 6px);inset-inline-end:0;width:260px;max-width:calc(100vw - 24px);padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--menu-shadow);z-index:50}
+.menu-popover :is(button,a){display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:10px;text-align:left;white-space:normal;font-size:var(--control-font);border-radius:var(--radius)}
+.menu-popover a:hover{background:var(--accent-bg)}
+.menu-popover hr{border:0;border-top:1px solid var(--line);margin:8px 0}
+.menu-account{font-size:var(--control-font);font-weight:600;padding:8px 10px;overflow-wrap:anywhere}
+.nested-menu>summary{justify-content:flex-start}
+.nested-menu>.menu-popover{position:static;width:100%;max-width:none;box-shadow:none;border:0;border-inline-start:2px solid var(--line);border-radius:0;margin-top:4px}
+.workspace-tabs{overflow:visible;position:relative;z-index:4;flex-wrap:wrap;gap:0}
+.workspace-tabs .sections-menu>summary{border-radius:0}
+.workspace-tabs .sections-menu>summary[aria-current=page]{border-bottom:2px solid var(--accent);font-weight:600;color:var(--ink)}
+.active-subsection{display:block;font-size:12px;line-height:1.2;color:var(--accent)}
+.contract-context{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
+.contract-heading{min-width:0;overflow-wrap:anywhere}
+.contract-heading h1{max-width:100%;overflow-wrap:anywhere}
+.contract-organization{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;font-size:14px}
+.contract-organization>span{min-width:0;overflow-wrap:anywhere}
+.context-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.context-actions select{width:120px;max-width:100%}
+@media(min-width:621px){
+  .sections-menu{display:contents}
+  .sections-menu>summary{display:none}
+  .sections-menu>.menu-popover{position:static;display:flex;align-items:stretch;gap:0;width:auto;max-width:none;padding:0;border:0;border-radius:0;box-shadow:none}
+  .sections-menu>.menu-popover button{width:auto;min-height:var(--control-height);white-space:nowrap;padding:9px 10px;border-radius:0}
+}
+@media(pointer:coarse),(max-width:900px){
+  :root{--control-height:44px}
+  :is(input,select,textarea){font-size:16px;min-height:44px}
+  :is(.context select,.queue-row select){min-height:44px;font-size:16px}
+  :is(button,.compact-action,.tabs button,.nav button,.finding .source-link){min-height:44px;min-width:44px}
+  :is(.content,.quick-privacy) details>summary{min-height:44px;padding-block:10px}
+  .quick-privacy summary{min-height:44px!important}
+}
+@media(max-width:900px){
+  .topbar{height:auto;min-height:60px;padding:8px 12px;gap:8px;flex-wrap:nowrap}
+  .topbar .brand{font-size:14px;gap:8px}
+  .topbar .brand .mark{width:24px;height:28px}
+  .mobile-nav,.mobile-back{display:inline-flex;align-items:center}
+  .mobile-back{padding-inline:0;color:var(--accent)}
+  .workspace{display:block}
+  #catalog-drawer{display:none}
+  #catalog-drawer.is-open{display:flex;position:fixed;inset:0 auto 0 0;width:min(360px,calc(100vw - 24px));height:100dvh;padding:16px;gap:12px;z-index:40;overflow:auto;border-right:1px solid var(--line)}
+  .drawer-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .drawer-open{overflow:hidden}
+  .drawer-open .drawer-backdrop{display:block;position:fixed;inset:0;background:#24282166;z-index:35}
+  #catalog-drawer .catalog{display:block;max-height:none;overflow:auto;flex:1}
+  #catalog-drawer .catalog button{min-width:0;max-width:none;margin-bottom:8px}
+  #catalog-drawer .sidebar-foot{display:block}
+  .contract-context{grid-template-columns:minmax(0,1fr);gap:8px}
+  .context-actions{width:100%}
+  .context-actions select{flex:1;max-width:160px}
+  .context-actions button{flex:none}
+  .quick-main>.context{flex-wrap:wrap}
+  .quick-main>.context>.row{width:auto}
+  .main{min-height:calc(100dvh - 88px)}
+  .context{padding:12px 14px}
+  .content{padding:16px}
+}
+@media(max-width:620px){
+  .workspace-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(64px,.8fr);padding:0 8px;align-items:stretch}
+  .workspace-tabs>button{padding:9px 4px;font-size:14px;min-width:0}
+  .workspace-tabs .sections-menu>summary{height:100%;padding:8px 4px;gap:2px;font-size:14px}
+  .workspace-tabs .sections-menu>summary>.ui-icon{width:16px;height:16px}
+  .workspace-tabs .menu-popover{width:220px}
+  .context-actions select{min-width:80px;max-width:none;width:80px}
+  .context-actions button{padding-inline:10px}
+  .contract-organization{font-size:14px}
+  .contract-organization>span{flex:1 1 160px}
+  .contract-organization button{padding-inline:0}
+  .decision-actions{align-items:stretch;flex-direction:column}
+  .decision-actions button{text-align:center}
 }
