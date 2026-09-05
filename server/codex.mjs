@@ -97,7 +97,8 @@ export class CodexRunner {
     const base = primary ? leanResult(primary) : null;
     const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(lookup ? organizationSchema : review ? reviewSchema : schema), { mode: 0o600 });
     const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c',lookup ? 'web_search="live"' : 'web_search="disabled"'];
-    for (const feature of disabled) args.push('--disable', feature);
+    for (const feature of disabled.filter(f=>!lookup||f!=='code_mode_host')) args.push('--disable', feature);
+    if(lookup)args.push('--enable','code_mode_host');
     if (isolatedHome) args.push('-c', 'history.persistence="none"');
     args.push('-');
     // Stable first, variable last: instructions, rules and profile repeat across every
@@ -129,6 +130,7 @@ export class CodexRunner {
           if (events.some(e => e.type === 'turn.failed' || e.type === 'error')) throw new Error('Codex сообщил об ошибке этапа.');
           const messages = events.filter(e => e.type === 'item.completed' && e.item?.type === 'agent_message');
           const answer = JSON.parse(messages.at(-1)?.item.text || '{}');
+          if(lookup)context.onEventSummary?.(events.map(e=>({type:e.type,itemType:e.item?.type,keys:Object.keys(e),itemKeys:Object.keys(e.item||{}),warning:e.item?.type==='error'?String(e.item.message).slice(0,1200).replace(/(?:sk-|eyJ)[A-Za-z0-9_.-]+/g,'[redacted]'):undefined})));
           if (!alive() || epoch !== this.authEpoch || this.closing) throw new Error('Запрос отменён.');
           if(lookup)return resolve(lookupResult(answer,snapshot.inn,events));
           const result = resultSources(validateResult(review ? parseReview(base, answer) : answer, snapshot, stage),snapshot,context.temporary?null:analysis);
@@ -197,10 +199,10 @@ export class CodexRunner {
       });
     } finally { try{await rm(cwd, { recursive: true, force: true });}finally{this.busy=false;} }
   }
-  async organizationLookup(user, job, inn, alive) {
+  async organizationLookup(user, job, inn, alive, onEventSummary) {
     if(this.busy||this.active||this.closing)throw new HttpError(409,'Codex занят. Повторите позже или заполните вручную.');
     this.busy=true;
-    try{return await this.execute(user,job,{inn},'organization',null,{temporary:true,directory:join(this.lookupRoot,'lookup-'+job),alive});}
+    try{return await this.execute(user,job,{inn},'organization',null,{temporary:true,directory:join(this.lookupRoot,'lookup-'+job),alive,onEventSummary});}
     finally{this.busy=false;}
   }
   async tick() {

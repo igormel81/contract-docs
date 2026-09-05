@@ -26,6 +26,7 @@ if 'ДАННЫЕ ПОИСКА:' in prompt:
     request = json.loads(prompt.split('ДАННЫЕ ПОИСКА:\n', 1)[1])
     assert set(request) == {'inn'}, 'Only the public tax ID may leave the application'
     assert 'web_search="live"' in sys.argv
+    assert sys.argv[sys.argv.index('code_mode_host')-1] == '--enable'
     for feature in ['shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'computer_use']:
         assert feature in sys.argv
     keys = ['name','legalName','inn','ogrn','kpp','address','base','website','capabilities','claimed','unverified']
