@@ -182,6 +182,11 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('дубль'));
   assert.equal(await page.$$eval('[data-action=quick-file]',els=>els.length),2);
   assert.equal([...app.quick.items.values()][0].contractor,orgB);
+  await page.click('[data-action=home]');
+  assert.equal(await page.$eval('#main h1',el=>el.textContent),'Договоры и шаблоны');
+  assert.equal(new URL(page.url()).hash,'');assert.equal(app.quick.items.size,1,'Home never discards the temporary package');
+  await clickControl('[data-action=quick-open]');await page.waitForSelector('#quick-file-picker');
+  assert.equal(await page.$$eval('[data-action=quick-file]',els=>els.length),2);
   await assertControlsLayout('quick-upload');
   for(const width of [1440,768,375]){
     await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth,h:innerHeight,sh:document.documentElement.scrollHeight}));
@@ -258,6 +263,16 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('.finding-disclosure>summary');
   await page.$eval('[data-form=recommendation] textarea',el=>{el.value='Уточнить оплату по п. 6.2';el.dispatchEvent(new Event('input',{bubbles:true}));});
   await page.select('[data-form=recommendation] select','planned');
+  await page.focus('[data-action=home]');await page.keyboard.press('Enter');
+  assert.equal(await page.$eval('#main h1',el=>el.textContent),'Договоры и шаблоны');
+  assert.equal(await page.$eval('#search',el=>el.value),'');
+  assert.equal(await page.$eval('#customer-filter',el=>el.value),'');
+  assert.ok(await page.$eval('#main h1',el=>el===document.activeElement));
+  await clickControl(`[data-action=open-contract][data-value="${stored}"]`);
+  await page.waitForSelector('.passport-compact');
+  await page.click('[data-action=tab][data-value=analysis]');
+  assert.equal(await page.$eval('[data-form=recommendation] textarea',el=>el.value),'Уточнить оплату по п. 6.2','Home preserves the recommendation draft within the session');
+  assert.equal(await page.$eval('[data-form=recommendation] select',el=>el.value),'planned');
   await assertControlsLayout('expanded-analysis');
   await controlsViewport(375);
   await page.click('[data-action=nav-toggle]');await page.keyboard.press('Escape');
@@ -403,6 +418,22 @@ sys.stdout.buffer.write(b.getvalue())`,'6.2. '+('Работы выполняют
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'200% equivalent reflow has no horizontal page overflow');
   assert.ok(await page.$eval('#main>.context h1',el=>el.scrollWidth<=el.clientWidth+1),'Long title wraps without clipping at 200% equivalent reflow');
   await page.screenshot({path:join(screenshotDir,'controls-reflow-200.png'),fullPage:true});
+  for(const width of [320,375,768,1440]){
+    await controlsViewport(width);
+    await page.click('[data-action=home]');
+    assert.equal(await page.$eval('#main h1',el=>el.textContent),'Договоры и шаблоны');
+    assert.equal(await page.$eval('[data-action=home]',el=>el.getAttribute('href')),'/docs/');
+    assert.ok(await page.$eval('[data-action=home]',el=>el.getBoundingClientRect().height>=44));
+    await clickControl('[data-action=settings]');await page.waitForSelector('.settings');
+    await page.click('[data-action=home]');
+    assert.equal(await page.$eval('#main h1',el=>el.textContent),'Договоры и шаблоны');
+    await page.screenshot({path:join(screenshotDir,`home-${width}.png`),fullPage:true});
+  }
+  await clickControl('[data-action=new-customer]');await page.type('[data-form=customer] [name=name]','Несохранённый заказчик');
+  page.once('dialog',d=>d.dismiss());await page.click('[data-action=home]');
+  assert.equal(await page.$eval('[data-form=customer] [name=name]',el=>el.value),'Несохранённый заказчик');
+  page.once('dialog',d=>d.accept());await page.click('[data-action=home]');
+  assert.equal(await page.$eval('#main h1',el=>el.textContent),'Договоры и шаблоны');
   assert.deepEqual(errors,[]);
   console.log('PASS controls: 320/375/390/768/1440; touch targets; long names; 200% equivalent reflow; drawers, menus, focus, mobile tabs, cancellation and drafts.');
   console.log('PASS center and side layouts: saved/quick, source links, draft preservation, saving decisions, same run, keyboard focus, 1440/768/375.');

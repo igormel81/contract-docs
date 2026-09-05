@@ -147,6 +147,8 @@ summary,.clause-comparison>summary{font-size:var(--control-font)}
 :is(.icon-button,.control-menu>summary):is(:hover,:focus-visible)>.control-tooltip{display:block}
 .topbar{position:relative;z-index:10}
 .topbar .brand{min-width:0;margin-inline-end:auto}
+.topbar a.brand{min-height:44px;color:var(--ink);text-decoration:none;border-radius:var(--radius)}
+.topbar a.brand:hover{color:var(--accent)}
 .topbar .brand .mark{flex:none}
 .mobile-nav,.mobile-back,.drawer-heading,.drawer-backdrop{display:none}
 .control-menu{position:relative;margin:0;min-width:0}

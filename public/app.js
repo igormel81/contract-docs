@@ -67,7 +67,7 @@ function loginView() {
 function topbar(){
   const about=controlMenu('about','О сервисе','<a href="/docs/local-installation/" target="_blank" rel="noopener" aria-label="Локальная установка (новая вкладка)">Локальная установка</a><a href="https://github.com/igormel81/contract-docs" target="_blank" rel="noopener noreferrer" aria-label="Код на GitHub (новая вкладка)">Код на GitHub</a>',{cls:'nested-menu'});
   const account=controlMenu('account','Аккаунт: '+state.user.login,`<p class="menu-account">${esc(state.user.login)}</p>${btn('Настройки','settings','','menu-action')}${btn('Организации','organizations','','menu-action')}${about}<hr>${btn('Выйти','logout','','menu-action')}`,{glyph:'account',cls:'account-menu',iconOnly:true});
-  return `<header class="topbar">${btn('Открыть каталог','nav-toggle','','quiet mobile-nav')}<div class="brand"><img class="mark" src="/docs/logo.svg" width="30" height="34" alt="" aria-hidden="true"><span>Договоры и риски</span></div>${account}</header>`;
+  return `<header class="topbar">${btn('Открыть каталог','nav-toggle','','quiet mobile-nav')}<a class="brand" href="/docs/" data-action="home" aria-label="Договоры и риски — начальный экран"><img class="mark" src="/docs/logo.svg" width="30" height="34" alt="" aria-hidden="true"><span>Договоры и риски</span></a>${account}</header>`;
 }
 function drawer(content){
   return `<aside id="catalog-drawer" class="sidebar" aria-label="Каталог договоров"><div class="drawer-heading"><strong>Договоры и шаблоны</strong>${btn('Закрыть каталог','nav-close','','quiet')}</div>${content}</aside>`;
@@ -313,6 +313,18 @@ async function loadSummary(analysisId,full){
 async function addFiles(files){const contractId=state.contractId;if(!contractId){notice('Сначала создайте или выберите договор.');return;}chosen();const rows=Array.from(files).map(file=>({file,status:'selected',message:'Ожидает загрузки'}));const existing=state.queues.get(contractId)||[];state.queues.set(contractId,[...existing,...rows]);render();for(const row of rows)await uploadRow(row,contractId);}
 document.addEventListener('click',async event=>{
   const button=event.target.closest('[data-action]');if(!button)return;const action=button.dataset.action,value=button.dataset.value;
+  if(action==='home'){
+    if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;
+    event.preventDefault();
+    const form=$('#main form'),dirty=form&&!form.hasAttribute('data-draft-key')&&form.dataset.form!=='organization'&&[...form.querySelectorAll('input,textarea,select')].some(el=>el.tagName==='SELECT'?el.value!==([...el.options].find(o=>o.defaultSelected)||el.options[0])?.value:['checkbox','radio'].includes(el.type)?el.checked!==el.defaultChecked:el.value!==el.defaultValue);
+    if(dirty&&!confirm('Вернуться на начальный экран? Несохранённые поля открытой формы будут сброшены.'))return;
+    closeMenus();
+    Object.assign(state,{contract:null,contractId:null,revisionId:null,runId:null,center:'set',kind:'contract',customer:'',query:'',source:null,sourceDocuments:null,risk:null,form:null,summary:null,findingFilter:'all',inspectorOpen:false,inspectorWide:false,drawerOpen:false});
+    sourceReturn=null;focusSource=false;restoreSourceFocus=false;focusSummary=false;
+    history.replaceState(null,'','/docs/');render();
+    const heading=$('#main h1');heading?.setAttribute('tabindex','-1');heading?.focus({preventScroll:true});window.scrollTo(0,0);
+    return;
+  }
   if(action==='nav-toggle'||action==='catalog-back'){closeMenus();setDrawer(!state.drawerOpen);return;}
   if(action==='nav-close'){setDrawer(false);return;}
   closeMenus();
