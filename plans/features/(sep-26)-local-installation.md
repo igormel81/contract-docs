@@ -3,7 +3,7 @@
 > **Status:** in progress — первая волна модулей; локальная поставка ещё не готова.
 > **Owner:** координатор проекта; исполнители — onprem_architecture, ux_implementation, normative_base.
 > **Surface:** server, deploy/onprem, public, test, документация и offline-дистрибутив.
-> **Updated:** 2026-09-05. **Baseline:** `07498bc`, пилот 0.3.2.
+> **Updated:** 2026-09-07. **Baseline:** `6004d92`, модульная основа 0.3.3.
 
 ## Что считаем результатом
 
@@ -36,8 +36,9 @@
 |---|---|
 | Пилот 0.3.2, `07498bc` | Codex, двухэтапная проверка, история, разовые пакеты, исходные номера пунктов; не offline inference |
 | Архитектура и source-архив | Опубликованы ранее; архив не содержит моделей, системных зависимостей и готовой offline-среды |
+| Основа 0.3.3, `6004d92` | Выпущены исходные модули local provider, opt-in OCR и доверенного импорта нормативных пакетов с синтетическими тестами; они не подключены к рабочему runner/API/UI |
 
-По этому плану локальные компоненты пока не выпущены. Статус задачи меняется на «принято» только после проверки её критериев; тесты с подставным сервером не заменяют испытания модели.
+Модульная основа выпущена в исходной поставке 0.3.3, но локальный режим приложения и offline-инсталлятор не выпущены. Статус LOC-01…09 меняется на «принято» только после проверки полных критериев; тесты с подставным сервером не заменяют испытания модели.
 
 ## Module evidence (not an application release)
 
@@ -49,7 +50,7 @@
 | LOC-05 | `server/extract.py` + `server/documents.mjs`, 9 OCR/extraction tests; OCR только opt-in, Linux+bubblewrap, original numbering preserved, timeout/cleanup | Русская модель Tesseract и реальный Linux namespace/cgroup gate не проверены; UI warning and admin option remain |
 | LOC-06 | `server/legal-packages.mjs`, 16 tests; signed package, hash/schema/date checks, immutable staging, explicit approval/activation, fail-closed corruption | API/UI/loader activation not connected; fixtures are synthetic and do not assert legal completeness |
 
-These results are implementation evidence for the next integration wave, not a claim that local installation is ready or that any module has been deployed.
+Эти результаты — доказательства реализации модулей для следующей интеграционной волны, а не утверждение о готовности локальной установки. Модули опубликованы в исходной поставке 0.3.3, но не активированы в рабочем приложении.
 
 ## In flight
 
@@ -124,3 +125,4 @@ These results are implementation evidence for the next integration wave, not a c
 - 2026-09-05: уточнены LOC-01…04 — Codex по умолчанию сохраняется; локальные модели являются опцией общего подключения приложения. Добавлены критерии переключения, сохранения серверной авторизации и исключения данных владельца из Git/архива. Переключатель пока не реализован.
 - 2026-09-05: девять обязательных задач превращены в план с зависимостями, границами первой волны и воротами приёмки; три существующих агента получили задания. Локальная установка ещё не выпущена.
 - 2026-09-05: первая волна модулей получила независимые synthetic-проверки; доказательства и ограничения зафиксированы отдельно от статуса приложения. Интеграция runner, UI-переключателя и offline-поставки остаётся в очереди.
+- 2026-09-07: модульная основа включена в исходную поставку 0.3.3; локальный runner исключён из релиза после независимого ревью P1/P2. Статус полной локальной установки остаётся in progress.
