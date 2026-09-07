@@ -1,8 +1,8 @@
 # Contract Docs — анализ договоров и управление рисками
 
-Веб-приложение для проверки договоров и приложений в PDF, DOC и DOCX: двухэтапный LLM-анализ с отдельным ревью, рекомендации по изменению условий, сравнение редакций и отслеживание договорных рисков со ссылками на исходные пункты. Текущая версия — пилот 0.3.2.
+Веб-приложение для проверки договоров и приложений в PDF, DOC и DOCX: двухэтапный LLM-анализ с отдельным ревью, рекомендации по изменению условий, сравнение редакций и отслеживание договорных рисков со ссылками на исходные пункты. Текущая версия — пилот 0.3.3.
 
-**Contract Docs** is a self-hosted contract review and risk management web application for Russian-language contracts. It supports PDF, DOC and DOCX, two-stage LLM analysis with a separate review, clause-level citations, amendment suggestions, document version comparison and risk mitigation tracking. Built with Node.js and SQLite; the current analysis runner uses Codex CLI. Local model integration is a documented architecture proposal, not an implemented feature.
+**Contract Docs** is a self-hosted contract review and risk management web application for Russian-language contracts. It supports PDF, DOC and DOCX, two-stage LLM analysis with a separate review, clause-level citations, amendment suggestions, document version comparison and risk mitigation tracking. Built with Node.js and SQLite; the active analysis runner uses Codex CLI. Version 0.3.3 includes tested local-provider, OCR and signed legal-package foundations, but does not yet expose a local-model switch in the application.
 
 [Сервис / Web app](https://igoruan.ru/docs/) · [Установка / Deployment](references/local-deployment.md) · [Архитектура / Architecture](<specs/(sep-26)-on-premise-architecture.md>) · [История выпусков / Changelog](changelog/README.md)
 

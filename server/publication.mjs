@@ -3,6 +3,8 @@ import {join} from 'node:path';
 
 // Exact public allowlist. Never resolve a user-provided filesystem path.
 const assets=new Map([
+  ['/docs/downloads/contract-docs-0.3.3.tar.gz',['downloads/contract-docs-0.3.3.tar.gz','application/gzip','contract-docs-0.3.3.tar.gz']],
+  ['/docs/downloads/contract-docs-0.3.3.tar.gz.sha256',['downloads/contract-docs-0.3.3.tar.gz.sha256','text/plain; charset=utf-8','contract-docs-0.3.3.tar.gz.sha256']],
   ['/docs/downloads/contract-docs-0.3.2.tar.gz',['downloads/contract-docs-0.3.2.tar.gz','application/gzip','contract-docs-0.3.2.tar.gz']],
   ['/docs/downloads/contract-docs-0.3.2.tar.gz.sha256',['downloads/contract-docs-0.3.2.tar.gz.sha256','text/plain; charset=utf-8','contract-docs-0.3.2.tar.gz.sha256']],
   ['/docs/downloads/contract-docs-0.3.1.tar.gz',['downloads/contract-docs-0.3.1.tar.gz','application/gzip','contract-docs-0.3.1.tar.gz']],

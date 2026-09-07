@@ -13,7 +13,7 @@ test('published documentation escapes markup, renders tables, code and source li
   assert.match(result.html,/href="deployment.html"/);assert.equal(result.toc.length,2);
 });
 test('source publication is allowlisted and rejects credential-like material',()=>{
-  for(const file of ['server/main.mjs','public/app.js','deploy/onprem/preflight.mjs','references/local-deployment.md'])assert.equal(includedSource(file),true);
+  for(const file of ['server/main.mjs','server/model-providers/local.mjs','server/legal-packages.mjs','public/app.js','plans/features/(sep-26)-local-installation.md','deploy/onprem/preflight.mjs','references/local-deployment.md'])assert.equal(includedSource(file),true);
   for(const file of ['deploy/route.py','deploy/contract-docs.service','test/vps-smoke.mjs','changelog/(sep-26).md','public/downloads/source.tar.gz','data/contracts.sqlite','.env','auth.json'])assert.equal(includedSource(file),false);
   assert.throws(()=>assertPublishable('data/contracts.sqlite',Buffer.from('x')));
   assert.throws(()=>assertPublishable('server/example.mjs',Buffer.from('sk-'+'x'.repeat(40))));
