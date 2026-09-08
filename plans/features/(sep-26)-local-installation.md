@@ -3,7 +3,7 @@
 > **Status:** in progress — первая волна модулей; локальная поставка ещё не готова.
 > **Owner:** координатор проекта; исполнители — onprem_architecture, ux_implementation, normative_base.
 > **Surface:** server, deploy/onprem, public, test, документация и offline-дистрибутив.
-> **Updated:** 2026-09-07. **Baseline:** `6004d92`, модульная основа 0.3.3.
+> **Updated:** 2026-09-08. **Baseline release:** `859271e`, версия 0.3.3. Текущий интеграционный кандидат не закоммичен.
 
 ## Что считаем результатом
 
@@ -48,7 +48,7 @@
 |---|---|---|
 | LOC-01/02/04 | `server/model-providers/local.mjs`, 28 synthetic tests; exact tokenizer preflight, context rejection, cancellation, schema validation and no fallback | Реальный vLLM/GPU не испытан; `generationProbed=false`, `revisionsAttested=false`; `server/local-runner.mjs` пока не включён в `main.mjs` |
 | LOC-05 | `server/extract.py` + `server/documents.mjs`, 9 OCR/extraction tests; OCR только opt-in, Linux+bubblewrap, original numbering preserved, timeout/cleanup | Русская модель Tesseract и реальный Linux namespace/cgroup gate не проверены; UI warning and admin option remain |
-| LOC-06 | `server/legal-packages.mjs`, 16 tests; signed package, hash/schema/date checks, immutable staging, explicit approval/activation, fail-closed corruption | API/UI/loader activation not connected; fixtures are synthetic and do not assert legal completeness |
+| LOC-06 | `server/legal-packages.mjs`; signed package, hash/schema/date checks, immutable staging, explicit approval/activation, HTTP API and active loader are implemented in the current candidate | Административный UI создан отдельно, но не подключён к приложению; полный регресс кандидата не завершён; fixtures синтетические и не подтверждают юридическую полноту |
 
 Эти результаты — доказательства реализации модулей для следующей интеграционной волны, а не утверждение о готовности локальной установки. Модули опубликованы в исходной поставке 0.3.3, но не активированы в рабочем приложении.
 
@@ -100,7 +100,7 @@
 
 | Gate | Что проверяем | Текущий статус |
 |---|---|---|
-| G1 | `npm run check`, `npm test`, тесты новых модулей и сохранение Codex-сценариев | Ожидает первой волны |
+| G1 | `npm run check`, `npm test`, тесты новых модулей и сохранение Codex-сценариев | Для выпущенной основы 0.3.3 пройден; для текущего кандидата `npm run check` проходит, полный `npm test` после интеграции не подтверждён |
 | G2 | Браузер: настройки, постоянный/разовый пакет, первичный этап, ревью, правка, отмена, ошибки, изоляция пользователей | Ожидает интеграции |
 | G3 | Реальный inference + русский OCR: ссылки, номера, схемы, граница контекста, сбой/рестарт, память и длительность этапов | Не выполнено; нужен стенд |
 | G4 | Чистая ОС, заблокированный интернет/DNS: install, end-to-end, update, rollback, restore, аудит временных следов | Не выполнено; нужен стенд |
@@ -122,6 +122,7 @@
 
 ## Update Log
 
+- 2026-09-08: фактическое состояние синхронизировано с рабочим деревом: API и loader нормативных пакетов реализованы, административный UI и полный интеграционный регресс остаются незавершёнными; локальный runner по-прежнему не подключён.
 - 2026-09-05: уточнены LOC-01…04 — Codex по умолчанию сохраняется; локальные модели являются опцией общего подключения приложения. Добавлены критерии переключения, сохранения серверной авторизации и исключения данных владельца из Git/архива. Переключатель пока не реализован.
 - 2026-09-05: девять обязательных задач превращены в план с зависимостями, границами первой волны и воротами приёмки; три существующих агента получили задания. Локальная установка ещё не выпущена.
 - 2026-09-05: первая волна модулей получила независимые synthetic-проверки; доказательства и ограничения зафиксированы отдельно от статуса приложения. Интеграция runner, UI-переключателя и offline-поставки остаётся в очереди.
