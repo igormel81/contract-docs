@@ -12,6 +12,8 @@ import { rules } from '../server/rules.mjs';
 // перечень за пределами фрагмента — модель поднимает их справедливо, и пример
 // начинает проверять собственную неполноту вместо правила.
 const dir = fileURLToPath(new URL('./rules/', import.meta.url));
+const qualificationTypes = new Set(['works','services','software_creation','exclusive_right_assignment','license','mixed','equipment_supply','procurement_44fz','procurement_223fz']);
+const legalTypes = new Set(['mandatory_violation','invalidity_or_unenforceability','dispositive_unfavorable','missing_required_term','facts_or_documents_required','not_applicable']);
 test('every rule in coverage has fixtures with a case that must not raise a finding', async () => {
   const files = (await readdir(dir)).filter(name => name.endsWith('.json'));
   const expected = rules.filter(r => r.coverage !== false).map(r => r.id).sort();
@@ -36,4 +38,32 @@ test('every rule in coverage has fixtures with a case that must not raise a find
       for (const neighbour of item.also || []) assert.ok(rules.some(r => r.id === neighbour), `${name}: also points at an existing rule`);
     }
   }
+});
+
+test('legal-v2 rule fixtures classify applicability before legal effect', async () => {
+  const changed = ['PD-01','IP-01','LIC-01','LOC-01'];
+  const fixtures = await Promise.all(changed.map(async id => JSON.parse(await readFile(join(dir, `${id}.json`), 'utf8'))));
+  for (const data of fixtures) {
+    for (const item of data.cases) {
+      assert.ok(Array.isArray(item.qualificationTypes), `${data.rule}: every case declares applicable obligation qualifications`);
+      for (const type of item.qualificationTypes) assert.ok(qualificationTypes.has(type), `${data.rule}: known qualification ${type}`);
+      if (item.expect === 'finding') assert.ok(legalTypes.has(item.legalType), `${data.rule}: a finding distinguishes its legal effect`);
+    }
+  }
+  const commercial = fixtures.flatMap(data => data.cases.map(item => ({ rule: data.rule, ...item })))
+    .filter(item => item.riskKind === 'commercial');
+  assert.ok(commercial.length > 0, 'fixtures include a commercial risk that remains worth discussing');
+  assert.ok(commercial.every(item => item.expect === 'finding' && item.legalType === 'not_applicable'), 'commercial risks are not labelled as legal violations');
+});
+
+test('only legal-v2 rules advance their snapshot versions and LAW-01 covers every qualification branch', () => {
+  const expectedVersions = { 'LAW-01': 4, 'PD-01': 3, 'IP-01': 3, 'LIC-01': 3, 'LOC-01': 5 };
+  for (const [id, version] of Object.entries(expectedVersions)) assert.equal(rules.find(rule => rule.id === id).version, version);
+  assert.deepEqual(rules.filter(rule => !Object.hasOwn(expectedVersions, rule.id)).map(rule => [rule.id, rule.version]), [
+    ['SCOPE-01',2], ['TIME-01',2], ['PAY-01',3], ['ACCEPT-01',2], ['LIAB-01',2], ['SLA-01',2], ['DATA-01',3]
+  ]);
+  const law = rules.find(rule => rule.id === 'LAW-01').instruction;
+  for (const type of qualificationTypes) assert.ok(law.includes(type), `LAW-01 has an applicability branch for ${type}`);
+  assert.match(law, /44-ФЗ.*procurement_44fz|procurement_44fz.*44-ФЗ/);
+  assert.match(law, /223-ФЗ.*procurement_223fz|procurement_223fz.*223-ФЗ/);
 });

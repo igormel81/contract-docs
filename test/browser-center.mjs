@@ -354,8 +354,20 @@ sys.stdout.buffer.write(b.getvalue())`,text]);await writeFile(join(root,name),by
   await page.click('[data-action=summary-open]');await page.waitForSelector('#summary-text');
   const letter=await page.$eval('#summary-text',el=>el.value);
   assert.match(letter,/Статус: ревью завершено/);assert.match(letter,/п\. 6\.2/);assert.ok(!letter.split('\n').filter(line=>line.startsWith('Пункт:')).some(line=>/\bb\d+\b/.test(line)),'Internal block identifiers never reach a reference');
+  assert.match(await page.$eval('#manager-summary-help',el=>el.textContent),/Включены все замечания: 1\./);
+  assert.equal(await page.$eval('[data-action=summary-copy][data-value=""]',el=>el.textContent.trim()),'Скопировать всё');
+  assert.equal(await page.$eval('.summary-actions a',el=>el.textContent.trim()),'Скачать TXT');
+  assert.match(await page.$eval('.summary-actions a',el=>el.getAttribute('href')),/scope=full&download=1/);
+  assert.equal(await page.$eval('[data-action=summary-mail]',el=>el.textContent.trim()),'Отправить по почте');
+  assert.equal(await page.$('[data-action=summary-scope]'),null,'There is no incomplete short-summary mode');
+  assert.equal(await page.$('[data-action=summary-share]'),null,'Web Share action stays hidden when the browser does not support it');
   for(const width of [1440,768,375]){await page.setViewport({width,height:900});await page.$eval('.summary-panel',el=>el.scrollIntoView({block:'start'}));const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'summary '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-summary-${width}.png`)});}
   await page.setViewport({width:1440,height:900});await page.click('[data-action=summary-close]');
+  await page.evaluate(()=>Object.defineProperty(navigator,'share',{configurable:true,value:async payload=>{globalThis.__sharedSummary=payload;}}));
+  await page.click('[data-action=summary-open]');await page.waitForSelector('[data-action=summary-share]');
+  await page.click('[data-action=summary-share]');
+  assert.deepEqual(await page.evaluate(()=>globalThis.__sharedSummary),{title:'Замечания по договору: Договор на внедрение',text:await page.$eval('#summary-text',el=>el.value)});
+  await page.click('[data-action=summary-close]');
   await page.click('[data-action=rules]');await page.waitForFunction(()=>document.body.textContent.includes('Не считать замечанием'));
   for(const width of [1440,375]){await page.setViewport({width,height:900});const s=await page.evaluate(()=>({w:innerWidth,sw:document.documentElement.scrollWidth}));assert.ok(s.sw<=s.w+1,'rules '+JSON.stringify(s));await page.screenshot({path:join(screenshotDir,`center-rules-${width}.png`)});}
   await page.setViewport({width:1440,height:900});await page.click('[data-action=tab][data-value=history]');await page.waitForFunction(()=>document.body.textContent.includes('Аналитик:'));

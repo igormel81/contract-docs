@@ -5,8 +5,9 @@ import { HttpError, choice, hash, required, body } from './security.mjs';
 import { format, extract } from './documents.mjs';
 import { rules, instructionVersion } from './rules.mjs';
 import { withLegalContext } from './legal.mjs';
+import { applyProgressEvent, createProgressiveAnalysis, toPublicProgress } from './progressive-analysis.mjs';
 
-const active = p => ['queued','primary','review'].includes(p.status);
+const active = p => ['queued','qualification','primary','contract_risks','legal_modules','review'].includes(p.status);
 const hour = 60 * 60 * 1000;
 
 // Deliberately no database dependency: document contents, snapshots and results
@@ -17,6 +18,7 @@ export class QuickChecks {
     this.items = new Map(); this.operations = new Set(); this.uploads = 0;
     this.clock = options.clock || Date.now; this.ttl = options.ttl || hour;
     this.extract = options.extract || extract; this.organizations = options.organizations;
+    this.legalCorpus = options.legalCorpus || (() => null);
     runner.temporary = this;
   }
   async init() {
@@ -38,7 +40,8 @@ export class QuickChecks {
     return { id: p.id, contractor: p.contractor, profile: p.profile, status: p.status, created: p.created,
       expires: new Date(p.expires).toISOString(), files: p.files, primary_result: p.primary,
       review_result: p.review, error: p.error, uploading: p.uploading, temporary: true,
-      queuedAt: p.queuedAt || null, stageStartedAt: p.stageStartedAt || null, legal: p.legal || null };
+      queuedAt: p.queuedAt || null, stageStartedAt: p.stageStartedAt || null, legal: p.legal || null,
+      progress: p.progress ? toPublicProgress(p.progress) : null };
   }
   create(user, contractor) {
     if (this.closing) throw new HttpError(503,'Сервис перезапускается. Повторите позже.');
@@ -46,7 +49,7 @@ export class QuickChecks {
     const existing = [...this.items.values()].find(p => p.user === user && !p.deleted && p.expires > this.clock());
     if (existing) throw new HttpError(409,'У вас уже есть временный пакет. Продолжите его или удалите перед новой проверкой.');
     if (this.items.size >= 12) throw new HttpError(429,'Все временные рабочие места заняты. Повторите позже.');
-    const p = { id:id(), user, contractor, profile, created:now(), expires:this.clock()+this.ttl, status:'draft', files:[], primary:null, review:null, error:null, uploading:false, operations:new Set() };
+    const p = { id:id(), user, contractor, profile, created:now(), expires:this.clock()+this.ttl, status:'draft', files:[], primary:null, review:null, progress:null, error:null, uploading:false, operations:new Set() };
     this.items.set(p.id,p); return this.view(p);
   }
   list(user) {
@@ -103,8 +106,9 @@ export class QuickChecks {
       if (!p.files.length||p.files.some(f=>f.status!=='ready')) throw new HttpError(400,'Загрузите читаемые документы; удалите файлы с ошибками перед запуском.');
       const documents=p.files.map(f=>({id:f.id,name:f.name,hash:f.hash,...f.extraction}));
       if (JSON.stringify(documents).length>360000) throw new HttpError(413,'Пакет слишком велик: максимум 360 000 символов.');
-      p.snapshot=p.snapshot||withLegalContext({version:1,kind:'contract',profile:p.profile,rules,instructionVersion,documents,created:now(),temporary:true});
+      p.snapshot=p.snapshot||withLegalContext({analysisContractVersion:'legal-v2',version:1,kind:'contract',profile:p.profile,rules,instructionVersion,documents,created:now(),temporary:true},new Date(),this.legalCorpus());
       p.legal=p.snapshot.legal;
+      p.progress=p.progress||createProgressiveAnalysis({analysisId:p.id,at:p.snapshot.created});
       p.status='queued';p.queuedAt=now();p.error=null;
       return this.view(p);
     } finally { p.starting=false; }
@@ -119,6 +123,40 @@ export class QuickChecks {
       const context=stage=>({temporary:true,directory:join(this.root,`job-${p.id}-${attempt}-${stage}`),alive});
       try {
         if (!alive()) return;
+        const progressive = p.snapshot.analysisContractVersion === 'legal-v2' && p.progress;
+        const event = (payload, status) => { p.progress=applyProgressEvent(p.progress,payload); if(status)p.status=status; };
+        const start = phase => event({id:`${p.id}:${phase}:start:${id()}`,type:'phase_started',phase,at:now()}, phase==='qualification'?'qualification':phase==='contract_risks'?'contract_risks':phase==='legal_modules'?'legal_modules':'review');
+        const done = (phase, output, status) => event({id:`${p.id}:${phase}:result:${id()}`,type:'phase_result',phase,output,at:now()}, status);
+        if (progressive) {
+          const phaseStatus = phase => p.progress.phases[phase].status;
+          let qualification = p.progress.result.qualifications;
+          if (phaseStatus('qualification') !== 'completed') {
+            start('qualification');
+            qualification=await this.runner.execute(p.user,p.id,p.snapshot,'qualification',null,context('qualification'));
+            if(!alive())return; qualification=qualification.qualifications; done('qualification',{qualifications:qualification},'running');
+          }
+          if (phaseStatus('contract_risks') !== 'completed') {
+            start('contract_risks');
+            if (!p.primary) p.primary=await this.runner.execute(p.user,p.id,p.snapshot,'primary',null,{...context('primary'),preliminaryQualifications:qualification});
+            if(!alive())return; done('contract_risks',{qualifications:p.primary.qualifications,findings:p.primary.findings},'running');
+          }
+          if (phaseStatus('legal_modules') !== 'completed') {
+            start('legal_modules');
+            const selected=new Set(p.primary.qualifications.flatMap(item=>item.legalModules));
+            const modules=(p.snapshot.legal?.modules||[]).filter(module=>selected.has(module.id));
+            done('legal_modules',{qualifications:p.primary.qualifications,findings:p.primary.findings,legalModules:modules},'review');
+          }
+          if (phaseStatus('review') !== 'completed') {
+            start('review');
+            p.review=await this.runner.execute(p.user,p.id,p.snapshot,'review',p.primary,context('review'));
+          }
+          if(!alive())return;
+          const reviewed=new Map(p.review.findings.map(item=>[item.id,item]));
+          const decisions=p.primary.findings.map(item=>{const next=reviewed.get(item.id);if(!next)return{id:item.id,verdict:'rejected',reason:'Отклонено ревьюером.'};const changed=JSON.stringify({...item,review:undefined})!==JSON.stringify({...next,review:undefined});return{id:item.id,verdict:changed?'corrected':'confirmed',reason:changed?'Уточнено ревьюером.':'Подтверждено ревьюером.',...(changed?{patch:next}:{})};});
+          done('review',{findings:p.review.findings,decisions},'awaiting_finalization');
+          event({id:`${p.id}:final:${id()}`,type:'analysis_finalized',at:now()},'complete');
+          p.status='complete';p.snapshot=null;return;
+        }
         if (!p.primary) {
           p.status='primary';p.stageStartedAt=now();
           const primary=await this.runner.execute(p.user,p.id,p.snapshot,'primary',null,context('primary'));
@@ -128,7 +166,13 @@ export class QuickChecks {
         const review=await this.runner.execute(p.user,p.id,p.snapshot,'review',p.primary,context('review'));
         if(!alive())return;p.review=review;p.status='complete';p.snapshot=null;
       } catch(e) {
-        if(alive()){p.status='error';p.error=e.message;}
+        if(alive()){
+          if(p.progress){
+            const running=Object.entries(p.progress.phases).find(([,value])=>value.status==='running')?.[0];
+            if(running){try{p.progress=applyProgressEvent(p.progress,{id:`${p.id}:${running}:failed:${id()}`,type:'phase_failed',phase:running,error:{code:'MODEL_FAILED',message:e.message,retryable:true},at:now()});}catch{/* keep the user-visible execution error */}}
+          }
+          p.status='error';p.error=e.message;
+        }
       }
     })();
     return this.track(p,operation);

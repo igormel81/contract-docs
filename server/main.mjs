@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir, mkdtemp, statfs, unlink } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { database, id, now, tx, audit } from './db.mjs';
 import { HttpError, required, choice, hash, token, passwordHash, passwordMatches, limit, body, jsonBody } from './security.mjs';
 import { format, extract, similarity } from './documents.mjs';
@@ -15,10 +15,27 @@ import { sourceRecord, resultSources } from './sources.mjs';
 import { findingKey } from '../public/document-ui.js';
 import { summaryText } from '../public/summary.js';
 import { legalCatalog, withLegalContext } from './legal.mjs';
+import { LegalPackageStore, MAX_LEGAL_PACKAGE_BYTES, computeLegalRecheckCandidates } from './legal-packages.mjs';
+import { createProgressiveAnalysis, toPublicProgress } from './progressive-analysis.mjs';
 import { servePublication } from './publication.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const parse = value => value ? JSON.parse(value) : null;
+function legalPackageConfiguration(options, dir) {
+  if (options.legalPackageStore) return { store: options.legalPackageStore,
+    managers: new Set((options.legalPackageManagers || []).map(value => String(value).normalize('NFKC').trim().toLowerCase()).filter(Boolean)) };
+  const configured = options.legalPackages;
+  const keyFile = configured?.trustedKeysFile || process.env.DOCS_LEGAL_TRUSTED_KEYS_FILE;
+  const reviewerList = configured?.reviewers || String(process.env.DOCS_LEGAL_REVIEWERS || '').split(',');
+  const reviewers = [...new Set(reviewerList.map(value => String(value).normalize('NFKC').trim().toLowerCase()).filter(Boolean))];
+  if (!keyFile && !reviewers.length) return { store: null, managers: new Set() };
+  if (!keyFile || reviewers.length < 2) throw new Error('Для нормативных пакетов нужны файл доверенных публичных ключей и минимум два ответственных.');
+  const serialized = JSON.parse(readFileSync(resolve(keyFile), 'utf8'));
+  if (!serialized || Array.isArray(serialized) || typeof serialized !== 'object') throw new Error('Файл доверенных ключей должен быть JSON-объектом keyId -> publicKeyPem.');
+  const store = new LegalPackageStore({ directory: resolve(configured?.directory || process.env.DOCS_LEGAL_PACKAGES_DIR || join(dir, 'legal-packages')),
+    trustedKeys: new Map(Object.entries(serialized)), reviewers: new Set(reviewers) });
+  return { store, managers: new Set(reviewers) };
+}
 export async function createApp(options = {}) {
   const dir = resolve(options.dir || process.env.DOCS_DATA || join(root, 'data'));
   const origin = options.origin || process.env.DOCS_ORIGIN || 'http://127.0.0.1:3107';
@@ -26,6 +43,23 @@ export async function createApp(options = {}) {
   const sandbox = options.sandbox ?? (process.env.DOCS_EXTRACT_SANDBOX !== 'off');
   if (!sandbox && secure) throw new Error('Нельзя отключать изоляцию извлечения в production.');
   const db = database(dir); await mkdir(join(dir, 'files'), { recursive: true, mode: 0o700 });
+  const legalPackages = legalPackageConfiguration(options, dir), legalStore = legalPackages.store;
+  const canManageLegal = user => Boolean(legalStore) && legalPackages.managers.has(user.login);
+  const requireLegalManager = user => {
+    if (!legalStore) throw new HttpError(503, 'Управление нормативными пакетами не настроено.');
+    if (!canManageLegal(user)) throw new HttpError(403, 'Нормативными пакетами управляют только назначенные ответственные.');
+  };
+  const legalPackageFailure = error => {
+    if (error instanceof HttpError) throw error;
+    const conflicts = new Set(['DUPLICATE_PACKAGE','DUPLICATE_APPROVAL','FOUR_EYES_REQUIRED','STORE_BUSY','APPROVAL_REQUIRED']);
+    const forbidden = new Set(['REVIEWER_FORBIDDEN']);
+    if (forbidden.has(error.code)) throw new HttpError(403,error.message);
+    if (conflicts.has(error.code)) throw new HttpError(409,error.message);
+    if (error.code) throw new HttpError(400,error.message);
+    throw error;
+  };
+  const activeLegalCorpus = () => legalStore?.activeCorpus() || null;
+  const currentLegalCatalog = () => legalCatalog(new Date(), activeLegalCorpus());
   const codexAdmin = String(options.codexAdmin ?? process.env.DOCS_CODEX_ADMIN ?? '').normalize('NFKC').trim().toLowerCase();
   const canManageCodex = user => Boolean(codexAdmin) && user.login === codexAdmin;
   function requireCodexAdmin(user) {
@@ -35,7 +69,7 @@ export async function createApp(options = {}) {
   const runtime = options.runtime || process.env.DOCS_RUNTIME || await mkdtemp(join(tmpdir(),'contract-docs-runtime-'));
   const organizations = new Organizations(db), lookups = new Map();
   await runner.initLookup(runtime);
-  const quick = new QuickChecks(runner,runtime,sandbox,{...options.quick,organizations}); await quick.init();
+  const quick = new QuickChecks(runner,runtime,sandbox,{...options.quick,organizations,legalCorpus:activeLegalCorpus}); await quick.init();
   const dummyHash = await passwordHash(token());
   const timer = options.autoTick === false ? null : setInterval(() => runner.tick().catch(() => {}), 2000); timer?.unref();
   const cleanupTimer=setInterval(()=>{quick.sweep().catch(()=>console.error('temporary cleanup failed'));for(const [key,job] of lookups)if(job.expires<Date.now())lookups.delete(key);},30000);cleanupTimer.unref();
@@ -54,7 +88,10 @@ export async function createApp(options = {}) {
     if (!row) throw new HttpError(404, 'Редакция не найдена.'); return row;
   }
   const fileView = f => ({ ...f, extraction: parse(f.extraction) });
-  const analysisView = a => ({ ...a, snapshot: undefined, legal: parse(a.snapshot)?.legal || null, rules: (parse(a.snapshot)?.rules || []).map(r => ({ id: r.id, version: r.version ?? null })), primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
+  const publicProgress = value => { try { return value ? toPublicProgress(parse(value)) : null; } catch { return null; } };
+  const analysisView = a => ({ ...a, snapshot: undefined, progress: publicProgress(a.progress), legal: parse(a.snapshot)?.legal || null,
+    rules: (parse(a.snapshot)?.rules || []).map(r => ({ id: r.id, version: r.version ?? null })),
+    primary_result: resultSources(parse(a.primary_result),parse(a.snapshot),a.id), review_result: resultSources(parse(a.review_result),parse(a.snapshot),a.id) });
   function originFinding(origin,contract,user){
     const split=origin.indexOf(':');if(split<1)throw new HttpError(400,'Некорректная ссылка на замечание.');
     const run=owned('analyses',origin.slice(0,split),user);if(run.contract_id!==contract)throw new HttpError(400,'Замечание относится к другому договору.');
@@ -133,9 +170,41 @@ export async function createApp(options = {}) {
     if (path === '/docs/api/bootstrap' && req.method === 'GET') return send(res,200,{
       customers: db.prepare('SELECT * FROM customers WHERE user_id=? ORDER BY name').all(user.id),
       contracts: db.prepare('SELECT c.*, (SELECT COUNT(*) FROM revisions r WHERE r.contract_id=c.id) revision_count FROM contracts c WHERE user_id=? ORDER BY created DESC').all(user.id),
-      profiles: organizations.profiles(user.id), organizations: organizations.list(user.id), rules: withLegalContext({rules}).rules, legal: legalCatalog(), codex: await runner.status(canManageCodex(user))
+      profiles: organizations.profiles(user.id), organizations: organizations.list(user.id), rules: withLegalContext({rules},new Date(),activeLegalCorpus()).rules,
+      legal: currentLegalCatalog(), legalPackages: { configured: Boolean(legalStore), canManage: canManageLegal(user) }, codex: await runner.status(canManageCodex(user))
     });
-    if (path === '/docs/api/legal-base' && req.method === 'GET') return send(res,200,legalCatalog());
+    if (path === '/docs/api/legal-base' && req.method === 'GET') return send(res,200,currentLegalCatalog());
+    if (path === '/docs/api/legal-packages') {
+      requireLegalManager(user);
+      if (req.method === 'GET') {
+        try { return send(res,200,{ packages:legalStore.list(), history:legalStore.history(), active:legalStore.activeCorpus() }); }
+        catch(error){ legalPackageFailure(error); }
+      }
+      if (req.method === 'POST') {
+        const bytes=await body(req,MAX_LEGAL_PACKAGE_BYTES);
+        try { const receipt=legalStore.stage(bytes,{importerId:user.login}); audit(db,user.id,null,'Импортирован нормативный пакет',`${receipt.packageId}: ${receipt.digest}`); return send(res,201,receipt); }
+        catch(error){ legalPackageFailure(error); }
+      }
+    }
+    const legalPackageMatch=path.match(/^\/docs\/api\/legal-packages\/([A-Za-z0-9._-]+)\/(approve|activate|history)$/);
+    if(legalPackageMatch){
+      requireLegalManager(user); const packageId=legalPackageMatch[1],action=legalPackageMatch[2];
+      try{
+        if(action==='history'&&req.method==='GET')return send(res,200,{packageId,history:legalStore.history(packageId)});
+        if(action==='approve'&&req.method==='POST'){
+          const input=await jsonBody(req),approval=legalStore.approve(packageId,{reviewerId:user.login,digest:required(input.digest,64),decision:input.decision,reason:required(input.reason,4000)});
+          audit(db,user.id,null,'Согласован нормативный пакет',`${packageId}: ${approval.digest}`);return send(res,200,approval);
+        }
+        if(action==='activate'&&req.method==='POST'){
+          const input=await jsonBody(req),activation=legalStore.activate(packageId,{actorId:user.login,digest:required(input.digest,64)}),nextLegal=legalStore.activeCorpus();
+          const analyses=db.prepare('SELECT id,snapshot FROM analyses WHERE user_id=?').all(user.id).map(row=>({id:row.id,snapshot:parse(row.snapshot)}));
+          const recheck=computeLegalRecheckCandidates(analyses,nextLegal);
+          audit(db,user.id,null,'Активирован нормативный пакет',`${packageId}: ${activation.digest}; повторно проверить ${recheck.candidates.length}`);
+          return send(res,200,{activation,recheck});
+        }
+      }catch(error){legalPackageFailure(error);}
+      throw new HttpError(405,'Действие с нормативным пакетом не поддерживается.');
+    }
     for(const [key,job] of lookups)if(job.expires<Date.now())lookups.delete(key);
     if(path==='/docs/api/organizations/lookup'&&req.method==='POST'){
       const input=await jsonBody(req),inn=String(input.inn||'').trim();
@@ -292,7 +361,7 @@ export async function createApp(options = {}) {
       if (action === 'analyses' && req.method === 'POST') {
         const input=await jsonBody(req); const rev=revision(required(input.revision_id),contract.id);
         if (!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Владелец приложения должен выполнить вход в настройках.');
-        if (db.prepare("SELECT id FROM analyses WHERE revision_id=? AND status IN ('queued','primary','review')").get(rev.id)) throw new HttpError(409,'Этот комплект уже в очереди или анализируется.');
+        if (db.prepare("SELECT id FROM analyses WHERE revision_id=? AND status IN ('queued','qualification','primary','contract_risks','legal_modules','review')").get(rev.id)) throw new HttpError(409,'Этот комплект уже в очереди или анализируется.');
         limit(db,`analyses:${user.id}`,10,3600000);
         const files = parse(rev.file_ids).map(key=>owned('files',key,user.id));
         if (files.some(f=>f.status!=='ready')) throw new HttpError(409,'В комплекте есть непрочитанные файлы. Исправьте их или явно исключите из новой редакции.');
@@ -306,8 +375,10 @@ export async function createApp(options = {}) {
         const sideNote=mine&&plain.includes(mine)?null:other.find(inn=>plain.includes(inn))
           ?'ИНН выбранного подрядчика в тексте не найден, зато найден ИНН другого профиля. Проверьте, та ли сторона выбрана; вывод об интересах стороны сделай с этой оговоркой.'
           :'ИНН выбранного подрядчика в тексте не найден. Возможно, реквизиты не извлеклись или выбрана не та сторона: отрази это в ограничениях.';
-        const snapshot=withLegalContext({revisionId:rev.id,version:rev.number,kind:contract.kind,profile,contractorNote:sideNote,rules,instructionVersion,documents,created:now()});
-        const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),now(),now());
+        const key=id(), created=now();
+        const snapshot=withLegalContext({analysisContractVersion:'legal-v2',revisionId:rev.id,version:rev.number,kind:contract.kind,profile,contractorNote:sideNote,rules,instructionVersion,documents,created},new Date(),activeLegalCorpus());
+        const progress=createProgressiveAnalysis({analysisId:key,at:created});
+        db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,progress,created,updated) VALUES(?,?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),JSON.stringify(progress),created,created);
         audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}${sideNote?'; '+sideNote:''}`); return send(res,202,{id:key,note:sideNote});
       }
       if (action === 'dismissed' && req.method === 'POST') {
@@ -383,11 +454,12 @@ export async function createApp(options = {}) {
       if(req.method==='POST'&&action==='retry'){
         if(!['error','interrupted'].includes(analysis.status)) throw new HttpError(409,'Эта попытка не требует повторения.');
         if(!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Обратитесь к владельцу приложения.');
-        const key=id(); db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,primary_result,created,updated) VALUES(?,?,?,?,?,?,?,?,?)').run(key,user.id,analysis.contract_id,analysis.revision_id,'queued',analysis.snapshot,analysis.primary_result,now(),now());
+        const key=id(), created=now();
+        db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,primary_result,progress,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,user.id,analysis.contract_id,analysis.revision_id,'queued',analysis.snapshot,analysis.primary_result,JSON.stringify(createProgressiveAnalysis({analysisId:key,at:created})),created,created);
         audit(db,user.id,analysis.contract_id,'Повтор анализа с сохранением прежней попытки',analysis.id); return send(res,202,{id:key});
       }
       if(req.method==='POST'&&action==='cancel'){
-        db.prepare("UPDATE analyses SET status='cancelled',updated=? WHERE id=? AND status IN ('queued','primary','review')").run(now(),analysis.id); runner.cancel(user.id,analysis.id); return send(res,200,{ok:true});
+        db.prepare("UPDATE analyses SET status='cancelled',updated=? WHERE id=? AND status IN ('queued','qualification','primary','contract_risks','legal_modules','review')").run(now(),analysis.id); runner.cancel(user.id,analysis.id); return send(res,200,{ok:true});
       }
       if(req.method==='POST'&&action==='proposal'){
         const input=await jsonBody(req); const stored=parse(analysis.review_result||analysis.primary_result);
@@ -441,7 +513,7 @@ export async function createApp(options = {}) {
   function dispose(){return disposal??=(async()=>{clearInterval(timer);clearInterval(cleanupTimer);runner.closing=true;await Promise.all([quick.close(),runner.stop()]);db.close();})();}
   server.on('close',()=>{void dispose().catch(()=>console.error('shutdown cleanup failed'));});
   async function close(){await new Promise(resolve=>server.close(resolve));await dispose();}
-  return {server,db,runner,dir,quick,close};
+  return {server,db,runner,dir,quick,legalStore,close};
 }
 if(process.argv[1] && realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
   const app=await createApp(); const port=Number(process.env.DOCS_PORT||3107);

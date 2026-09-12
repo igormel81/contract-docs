@@ -1,17 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { canonicalLegalJson, legalCorpusDigest, legalPackageDigest, legalPackageSigningPayload,
-  verifyLegalPackage, LegalPackageStore, MAX_LEGAL_PACKAGE_BYTES } from '../server/legal-packages.mjs';
+  computeLegalRecheckCandidates, verifyLegalPackage, LegalPackageStore, MAX_LEGAL_PACKAGE_BYTES } from '../server/legal-packages.mjs';
 
 // Keys are generated in RAM for this test run. No publisher credential or private
 // key file is committed, written to disk, or claimed to have been legally reviewed.
 const issuer = generateKeyPairSync('ed25519'), otherIssuer = generateKeyPairSync('ed25519');
 const trustedKeys = new Map([['test-publisher', issuer.publicKey]]);
-const reviewers = new Set(['legal-reviewer']);
+const reviewers = new Set(['legal-reviewer', 'package-importer', 'release-operator']);
 const instant = () => new Date('2026-09-06T12:00:00Z');
 // Entirely synthetic schema fixture: no production corpus or actual legal text.
 // The allowed-host URL is a placeholder, never fetched or offered as evidence.
@@ -43,10 +43,11 @@ function fixture(t, options = {}) {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return new LegalPackageStore({ directory, trustedKeys, reviewers, clock: instant, ...options });
 }
+function stage(store, bytes, importerId = 'package-importer') { return store.stage(bytes, { importerId }); }
 function approve(store, receipt) {
   return store.approve(receipt.packageId, { reviewerId: 'legal-reviewer', digest: receipt.digest, decision: 'approved', reason: 'Искусственное согласование для теста механизма; не юридическая проверка.' });
 }
-function activate(store, receipt) { return store.activate(receipt.packageId, { reviewerId: 'legal-reviewer', digest: receipt.digest }); }
+function activate(store, receipt) { return store.activate(receipt.packageId, { actorId: 'release-operator', digest: receipt.digest }); }
 
 test('canonical payload is deterministic, binds the complete manifest and verifies an explicit Ed25519 key', () => {
   const envelope = makePackage(), checked = check(envelope);
@@ -60,6 +61,20 @@ test('canonical payload is deterministic, binds the complete manifest and verifi
   assert.equal(checked.corpus.norms[0].textSha256.length, 64);
   assert.equal(verifyLegalPackage(JSON.stringify(envelope, null, 2), { trustedKeys, now: instant() }).digest, checked.digest);
   assert.throws(() => canonicalLegalJson({ bad: undefined }), code('INVALID_JSON'));
+});
+
+test('legacy corpus is normalized into a core module while explicit modules bind every norm', () => {
+  const legacy = check(makePackage()).corpus;
+  assert.deepEqual(legacy.modules, [{ id: 'core', title: 'Базовый нормативный модуль', qualificationTypes: [], enabledByDefault: true }]);
+  assert.equal(legacy.norms[0].moduleId, 'core');
+  const modular = check(makePackage({ corpusPatch: { modules: [
+    { id: 'core', title: 'Общие положения', qualificationTypes: [], enabledByDefault: true },
+    { id: 'personal-data', title: 'Персональные данные', qualificationTypes: ['personal_data'], enabledByDefault: false },
+  ] }, mutateCorpus: corpus => { corpus.norms[0].moduleId = 'personal-data'; } })).corpus;
+  assert.equal(modular.norms[0].moduleId, 'personal-data');
+  assert.throws(() => check(makePackage({ corpusPatch: { modules: [
+    { id: 'core', title: 'Общие положения', qualificationTypes: [], enabledByDefault: true },
+  ] }, mutateCorpus: corpus => { corpus.norms[0].moduleId = 'missing'; } })), code('UNKNOWN_MODULE'));
 });
 
 test('modified text, signed metadata, wrong key and embedded trust material cannot pass verification', () => {
@@ -123,31 +138,124 @@ test('duplicate norm identifiers, equivalent act locations, incorrect norm hashe
 
 test('staging is immutable and duplicates cannot overwrite or alias an existing version', t => {
   const store = fixture(t), envelope = makePackage();
-  const receipt = store.stage(wire(envelope));
+  const receipt = stage(store, wire(envelope));
   assert.equal(receipt.state, 'staged'); assert.equal(store.activeCorpus(), null);
-  assert.throws(() => store.stage(wire(envelope)), code('DUPLICATE_PACKAGE'));
-  assert.throws(() => store.stage(wire(makePackage({ manifestPatch: { packageId: 'different-package' } }))), code('DUPLICATE_PACKAGE'));
-  assert.throws(() => store.stage(wire(makePackage({ manifestPatch: { packageId: 'different-package' }, mutateCorpus: c => { c.norms[0].interpretation += ' Изменено.'; } }))), code('DUPLICATE_PACKAGE'));
+  assert.equal(receipt.importerId, 'package-importer');
+  assert.throws(() => stage(store, wire(envelope)), code('DUPLICATE_PACKAGE'));
+  assert.throws(() => stage(store, wire(makePackage({ manifestPatch: { packageId: 'different-package' } }))), code('DUPLICATE_PACKAGE'));
+  assert.throws(() => stage(store, wire(makePackage({ manifestPatch: { packageId: 'different-package' }, mutateCorpus: c => { c.norms[0].interpretation += ' Изменено.'; } }))), code('DUPLICATE_PACKAGE'));
   assert.equal(readFileSync(store.packagePath(receipt.packageId), 'utf8'), canonicalLegalJson(envelope));
 });
 
+test('pre-v2 package stores remain inspectable after upgrade without bypassing import attribution', t => {
+  const store = fixture(t), receipt = stage(store, wire(makePackage()));
+  unlinkSync(store.importPath(receipt.packageId));
+  const status = store.status(receipt.packageId);
+  assert.equal(status.state, 'staged');
+  assert.equal(status.importerId, null);
+  assert.deepEqual(store.history(receipt.packageId).map(event => event.type), ['staged']);
+  assert.equal(store.history(receipt.packageId)[0].actorId, null);
+  assert.throws(() => store.approve(receipt.packageId, { reviewerId: 'legal-reviewer', digest: receipt.digest,
+    decision: 'approved', reason: 'Нужна отдельная атрибуция импорта.' }), code('IMPORT_REQUIRED'));
+});
+
+test('failed import-record creation rolls back the newly staged package', t => {
+  const store = fixture(t);
+  writeFileSync(store.importPath('test-package-1'), '{}', { mode: 0o400 });
+  assert.throws(() => stage(store, wire(makePackage())), error => error.code === 'EEXIST');
+  assert.throws(() => store.readPackage('test-package-1', false), error => error.code === 'ENOENT');
+});
+
+test('staging requires an attributable importer and approval enforces four eyes', t => {
+  const store = fixture(t), bytes = wire(makePackage());
+  assert.throws(() => store.stage(bytes), code('IMPORTER_REQUIRED'));
+  const receipt = stage(store, bytes);
+  assert.throws(() => store.approve(receipt.packageId, { reviewerId: 'package-importer', digest: receipt.digest,
+    decision: 'approved', reason: 'Самосогласование недопустимо.' }), code('FOUR_EYES_REQUIRED'));
+  const approval = approve(store, receipt);
+  assert.equal(approval.importerId, 'package-importer');
+  assert.notEqual(approval.reviewerId, approval.importerId);
+});
+
 test('activation requires an explicit allowlisted reviewer decision bound to the exact signed package', t => {
-  const store = fixture(t), receipt = store.stage(wire(makePackage()));
+  const store = fixture(t), receipt = stage(store, wire(makePackage()));
   assert.throws(() => activate(store, receipt), code('APPROVAL_REQUIRED'));
   assert.throws(() => store.approve(receipt.packageId, { reviewerId: 'ordinary-user', digest: receipt.digest, decision: 'approved', reason: 'Я согласен' }), code('REVIEWER_FORBIDDEN'));
   assert.throws(() => store.approve(receipt.packageId, { reviewerId: 'legal-reviewer', digest: receipt.digest, decision: 'pending', reason: 'Я согласен' }), code('APPROVAL_REQUIRED'));
   assert.throws(() => store.approve(receipt.packageId, { reviewerId: 'legal-reviewer', digest: '0'.repeat(64), decision: 'approved', reason: 'Я согласен' }), code('DIGEST_MISMATCH'));
   approve(store, receipt);
   assert.throws(() => approve(store, receipt), code('DUPLICATE_APPROVAL'));
-  assert.throws(() => store.activate(receipt.packageId, { reviewerId: 'ordinary-user', digest: receipt.digest }), code('REVIEWER_FORBIDDEN'));
+  assert.throws(() => store.activate(receipt.packageId, { actorId: 'ordinary-user', digest: receipt.digest }), code('REVIEWER_FORBIDDEN'));
   assert.throws(() => activate(store, { ...receipt, digest: '0'.repeat(64) }), code('DIGEST_MISMATCH'));
   activate(store, receipt);
   assert.equal(store.activeCorpus().status, 'reference_only');
   assert.equal(store.activeCorpus().approvedBy, 'legal-reviewer');
+  assert.equal(store.activeCorpus().activatedBy, 'release-operator');
+});
+
+test('read-only package list, status and immutable history expose the complete lifecycle', t => {
+  let now = instant(); const store = fixture(t, { clock: () => now });
+  const active = stage(store, wire(makePackage()));
+  assert.equal(store.status(active.packageId).state, 'staged');
+  approve(store, active);
+  assert.equal(store.status(active.packageId).state, 'approved');
+  activate(store, active);
+  const activeStatus = store.status(active.packageId);
+  assert.equal(activeStatus.state, 'active');
+  assert.equal(activeStatus.importerId, 'package-importer');
+  assert.equal(activeStatus.reviewerId, 'legal-reviewer');
+  assert.equal(activeStatus.activatedBy, 'release-operator');
+  assert.deepEqual(store.history(active.packageId).map(event => event.type), ['staged', 'approved', 'activated']);
+  assert.deepEqual(store.history(active.packageId).map(event => event.actorId), ['package-importer', 'legal-reviewer', 'release-operator']);
+
+  const expiring = stage(store, wire(makePackage({ manifestPatch: { packageId: 'expires-soon', expiresAt: '2026-09-07T00:00:00Z' },
+    corpusPatch: { version: 'expires-soon-v1' }, mutateCorpus: corpus => { corpus.norms[0].interpretation += ' Другая редакция.'; } })));
+  now = new Date('2026-09-07T00:00:00Z');
+  assert.equal(store.status(expiring.packageId).state, 'expired');
+  assert.deepEqual(store.list().map(item => [item.packageId, item.state]), [['expires-soon', 'expired'], ['test-package-1', 'active']]);
+
+  const returned = store.history(active.packageId); returned[0].actorId = 'caller-mutated';
+  assert.equal(store.history(active.packageId)[0].actorId, 'package-importer');
+});
+
+test('workflow records are digest-bound and corruption makes status fail closed', t => {
+  const store = fixture(t), receipt = stage(store, wire(makePackage())); approve(store, receipt);
+  const path = store.importPath(receipt.packageId), original = readFileSync(path, 'utf8');
+  const changed = JSON.parse(original); changed.importerId = 'someone-else';
+  chmodSync(path, 0o600); writeFileSync(path, wire(changed));
+  assert.throws(() => store.status(receipt.packageId), code('IMPORT_INVALID'));
+});
+
+test('recheck candidates identify changed versions and relevant modules without mutating analyses', () => {
+  const modules = [
+    { id: 'core', title: 'Общие положения', qualificationTypes: [], enabledByDefault: true },
+    { id: 'personal-data', title: 'Персональные данные', qualificationTypes: ['personal_data'], enabledByDefault: false },
+  ];
+  const oldChecked = check(makePackage({ corpusPatch: { modules }, mutateCorpus: corpus => {
+    corpus.norms[0].moduleId = 'core'; corpus.norms.push({ ...structuredClone(corpus.norms[0]), id: 'SYNTHETIC-PD-1', article: '2',
+      moduleId: 'personal-data', text: 'Старый искусственный текст модуля персональных данных.' });
+  } }));
+  const nextChecked = check(makePackage({ manifestPatch: { packageId: 'test-package-2' },
+    corpusPatch: { version: 'synthetic-corpus-2', modules }, mutateCorpus: corpus => {
+      corpus.norms[0].moduleId = 'core'; corpus.norms.push({ ...structuredClone(corpus.norms[0]), id: 'SYNTHETIC-PD-1', article: '2',
+        moduleId: 'personal-data', text: 'Новый искусственный текст модуля персональных данных.' });
+  } }));
+  const analyses = [
+    { id: 'analysis-pd', snapshot: { legal: { ...oldChecked.corpus, packageDigest: oldChecked.digest, activeModuleIds: ['personal-data'] } } },
+    { id: 'analysis-core', snapshot: { legal: { ...oldChecked.corpus, packageDigest: oldChecked.digest, activeModuleIds: ['core'] } } },
+    { id: 'analysis-current', snapshot: { legal: { ...nextChecked.corpus, packageDigest: nextChecked.digest, activeModuleIds: ['personal-data'] } } },
+  ];
+  const original = structuredClone(analyses);
+  const result = computeLegalRecheckCandidates(analyses, { ...nextChecked.corpus, packageDigest: nextChecked.digest });
+  assert.equal(result.nextVersion, 'synthetic-corpus-2');
+  assert.deepEqual(result.changedModuleIds, ['personal-data']);
+  assert.deepEqual(result.candidates, [{ analysisId: 'analysis-pd', fromVersion: 'synthetic-corpus-1',
+    toVersion: 'synthetic-corpus-2', moduleIds: ['personal-data'], reason: 'legal_modules_changed' }]);
+  assert.deepEqual(analyses, original);
 });
 
 test('a legitimately signed replacement after approval is rejected even if corpus bytes stay identical', t => {
-  const store = fixture(t), receipt = store.stage(wire(makePackage())); approve(store, receipt);
+  const store = fixture(t), receipt = stage(store, wire(makePackage())); approve(store, receipt);
   const path = store.packagePath(receipt.packageId); chmodSync(path, 0o600);
   writeFileSync(path, wire(makePackage({ manifestPatch: { expiresAt: '2026-10-01T00:00:00Z' } })));
   assert.throws(() => activate(store, receipt), code('DIGEST_MISMATCH'));
@@ -156,20 +264,20 @@ test('a legitimately signed replacement after approval is rejected even if corpu
 });
 
 test('filesystem lock excludes concurrent mutations and input ids never select filesystem paths', t => {
-  const store = fixture(t), receipt = store.stage(wire(makePackage()));
+  const store = fixture(t), receipt = stage(store, wire(makePackage()));
   for (const id of ['../outside', '/tmp/outside', 'a/b', 'a\\b', '..', 'x%2fy']) {
     assert.throws(() => store.readPackage(id), code('INVALID_ID'));
     assert.throws(() => check(makePackage({ manifestPatch: { packageId: id } })), code('PACKAGE_SCHEMA'));
   }
   mkdirSync(join(store.directory, '.lock'), { mode: 0o700 });
   const peer = new LegalPackageStore({ directory: store.directory, trustedKeys, reviewers, clock: instant });
-  assert.throws(() => peer.stage(wire(makePackage())), code('STORE_BUSY'));
+  assert.throws(() => stage(peer, wire(makePackage())), code('STORE_BUSY'));
   assert.throws(() => approve(peer, receipt), code('STORE_BUSY'));
   assert.throws(() => activate(peer, receipt), code('STORE_BUSY'));
 });
 
 test('symlink substitutions cannot provide package bytes or reviewer approvals', t => {
-  const store = fixture(t), receipt = store.stage(wire(makePackage()));
+  const store = fixture(t), receipt = stage(store, wire(makePackage()));
   const outside = join(store.directory, 'outside.json'); writeFileSync(outside, '{}');
   symlinkSync(outside, store.approvalPath(receipt.packageId));
   assert.throws(() => activate(store, receipt), error => ['ELOOP', 'EMLINK'].includes(error.code));
@@ -179,7 +287,7 @@ test('symlink substitutions cannot provide package bytes or reviewer approvals',
 
 test('an active package fails closed after expiry or trust revocation', t => {
   let now = instant(); const store = fixture(t, { clock: () => now });
-  const receipt = store.stage(wire(makePackage())); approve(store, receipt); activate(store, receipt);
+  const receipt = stage(store, wire(makePackage())); approve(store, receipt); activate(store, receipt);
   now = new Date('2026-09-30T00:00:00Z');
   assert.throws(() => store.activeCorpus(), code('PACKAGE_EXPIRED'));
   const revokedKey = new LegalPackageStore({ directory: store.directory, trustedKeys: new Map(), reviewers, clock: instant });
@@ -190,10 +298,10 @@ test('an active package fails closed after expiry or trust revocation', t => {
 
 test('approval and activation recheck expiry without changing an existing active package', t => {
   let now = instant(); const store = fixture(t, { clock: () => now });
-  const first = store.stage(wire(makePackage())); approve(store, first); activate(store, first);
-  const second = store.stage(wire(makePackage({ manifestPatch: { packageId: 'short-lived', expiresAt: '2026-09-07T00:00:00Z' },
+  const first = stage(store, wire(makePackage())); approve(store, first); activate(store, first);
+  const second = stage(store, wire(makePackage({ manifestPatch: { packageId: 'short-lived', expiresAt: '2026-09-07T00:00:00Z' },
     corpusPatch: { version: 'synthetic-short-lived' } })));
-  const third = store.stage(wire(makePackage({ manifestPatch: { packageId: 'never-approved', expiresAt: '2026-09-07T00:00:00Z' },
+  const third = stage(store, wire(makePackage({ manifestPatch: { packageId: 'never-approved', expiresAt: '2026-09-07T00:00:00Z' },
     corpusPatch: { version: 'synthetic-never-approved' } })));
   approve(store, second);
   now = new Date('2026-09-07T00:00:00Z');
@@ -201,7 +309,7 @@ test('approval and activation recheck expiry without changing an existing active
   assert.throws(() => activate(store, second), code('PACKAGE_EXPIRED'));
   assert.equal(store.activeCorpus().packageId, first.packageId);
   // Expired staged entries remain immutable but do not prevent a fresh edition.
-  const replacement = store.stage(wire(makePackage({ manifestPatch: { packageId: 'replacement' },
+  const replacement = stage(store, wire(makePackage({ manifestPatch: { packageId: 'replacement' },
     corpusPatch: { version: 'synthetic-replacement' } })));
   approve(store, replacement); activate(store, replacement);
   assert.equal(store.activeCorpus().packageId, 'replacement');
@@ -210,10 +318,10 @@ test('approval and activation recheck expiry without changing an existing active
 test('active corpus and norm deadlines are rechecked independently of package expiry', t => {
   let now = instant();
   const corpusStore = fixture(t, { clock: () => now });
-  const corpus = corpusStore.stage(wire(makePackage({ corpusPatch: { reviewDueAt: '2026-09-06' } })));
+  const corpus = stage(corpusStore, wire(makePackage({ corpusPatch: { reviewDueAt: '2026-09-06' } })));
   approve(corpusStore, corpus); activate(corpusStore, corpus);
   const normStore = fixture(t, { clock: () => now });
-  const norm = normStore.stage(wire(makePackage({ mutateCorpus: c => {
+  const norm = stage(normStore, wire(makePackage({ mutateCorpus: c => {
     c.norms[0].effectiveFrom = '2026-01-01'; c.norms[0].effectiveTo = '2026-09-06';
   } })));
   approve(normStore, norm); activate(normStore, norm);
@@ -225,9 +333,9 @@ test('active corpus and norm deadlines are rechecked independently of package ex
 test('corrupted import, stored approval and activation cannot silently replace trusted state', t => {
   const store = fixture(t), envelope = makePackage();
   const broken = structuredClone(envelope); broken.corpus.norms[0].text += ' altered';
-  assert.throws(() => store.stage(wire(broken)), code('DIGEST_MISMATCH'));
+  assert.throws(() => stage(store, wire(broken)), code('DIGEST_MISMATCH'));
   assert.equal(store.activeCorpus(), null);
-  const receipt = store.stage(wire(envelope)); approve(store, receipt); activate(store, receipt);
+  const receipt = stage(store, wire(envelope)); approve(store, receipt); activate(store, receipt);
   const approvalPath = store.approvalPath(receipt.packageId);
   const originalApproval = readFileSync(approvalPath, 'utf8');
   const changedApproval = JSON.parse(originalApproval); changedApproval.reason = 'Changed after activation';
@@ -241,9 +349,9 @@ test('corrupted import, stored approval and activation cannot silently replace t
 });
 
 test('activating a new package neither mutates historical snapshots nor exposes mutable store references', t => {
-  const store = fixture(t), first = store.stage(wire(makePackage())); approve(store, first); activate(store, first);
+  const store = fixture(t), first = stage(store, wire(makePackage())); approve(store, first); activate(store, first);
   const oldSnapshot = { documents: [], legal: store.activeCorpus() }, original = JSON.stringify(oldSnapshot);
-  const second = store.stage(wire(makePackage({ manifestPatch: { packageId: 'test-package-2' }, corpusPatch: { version: 'test-corpus-2' } })));
+  const second = stage(store, wire(makePackage({ manifestPatch: { packageId: 'test-package-2' }, corpusPatch: { version: 'test-corpus-2' } })));
   approve(store, second); activate(store, second);
   assert.equal(store.activeCorpus().version, 'test-corpus-2'); assert.equal(JSON.stringify(oldSnapshot), original);
   const current = store.activeCorpus(); current.norms[0].text = 'Изменено вызывающим кодом';

@@ -63,6 +63,7 @@ if snapshot.get('temporary'):
         credential['last_refresh'] = 'test-refresh-marker'
         (authdir / 'auth.json').write_text(json.dumps(credential))
 review = 'ЭТАП 2, НЕЗАВИСИМЫЙ РЕВЬЮЕР.' in prompt
+qualification = 'ЭТАП 0, КВАЛИФИКАЦИЯ.' in prompt
 if not review and 'SLOW_PRIMARY' in payload:
     (authdir / 'primary-started').touch()
     time.sleep(10)
@@ -75,17 +76,21 @@ passport = [{'key':key,'title':key,'value':'Не найдено','status':'missi
 passport[0].update(value=block['text'], status='extracted', sources=[{'fileId':document['id'],'blockId':block['id'],'quote':block['text']}])
 coverage = [{'rule':r['id'],'status':'needs_data','note':'Тест'} for r in snapshot['rules'] if r.get('coverage', True)]
 limitations = ['Тестовая модель, не настоящий анализ']
-if review:
+qualifications = [{'type':'works','sources':passport[0]['sources'],'confidence':'high','note':'Тестовая квалификация по предмету договора.','legalModules':[]}]
+if qualification:
+    output = {'qualifications': qualifications}
+elif review:
     # The reviewer answers with one verdict per finding; the server assembles the result.
     analyst = json.loads(prompt.split('РЕШЕНИЯ ПО РЕЗУЛЬТАТУ АНАЛИТИКА (недоверенные данные):\n', 1)[1].strip())
     output = {'summary':'Только тестовая сводка', 'passport':passport, 'coverage':coverage, 'limitations':limitations,
               'changes':['Проверен тестовый результат'],
+              'qualifications': qualifications,
               'verdicts':[{'id':f['id'],'verdict':'confirmed','reason':'Цитата и пункт совпали с исходником.',
                            'title':'','description':'','severity':'','proposal':'','sources':[]} for f in analyst['findings']],
               'added':[]}
 else:
-    output = {'summary':'Только тестовая сводка', 'passport':passport, 'coverage':coverage, 'limitations':limitations, 'changes':[],
-              'findings':[{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'proposal':'Уточнить порядок согласования места выполнения работ.','review':'primary'}]}
+    output = {'summary':'Только тестовая сводка', 'qualifications':qualifications, 'passport':passport, 'coverage':coverage, 'limitations':limitations, 'changes':[],
+              'findings':[{'id':'test-finding','rule':'LOC-01','title':'Тестовый риск места работ','severity':'medium','description':'Искусственное замечание для проверки привязки к исходнику.','sources':passport[0]['sources'],'legalSources':[],'legalType':'not_applicable','proposal':'Уточнить порядок согласования места выполнения работ.','review':'primary'}]}
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':json.dumps(output)}}))
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}))

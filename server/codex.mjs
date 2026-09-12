@@ -3,12 +3,13 @@ import { mkdir, readFile, writeFile, unlink, rm, readdir } from 'node:fs/promise
 import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { validateResult, parseReview } from './schema.mjs';
+import { validateResult, validateQualifications, parseReview } from './schema.mjs';
 import { lookupResult } from './organizations.mjs';
 import { now, audit } from './db.mjs';
 import { HttpError } from './security.mjs';
 import { resultSources } from './sources.mjs';
 import { analysisRequest, proposalRequest } from './model-request.mjs';
+import { applyProgressEvent } from './progressive-analysis.mjs';
 
 const disabled = ['shell_tool','unified_exec','apps','plugins','remote_plugin','hooks','multi_agent','multi_agent_v2','browser_use','browser_use_external','computer_use','image_generation','view_image','workspace_dependencies','skill_search','code_mode_host','in_app_browser','in_app_local_automation','goals','sleep_tool'];
 async function stopChild(child) {
@@ -23,7 +24,7 @@ export class CodexRunner {
   constructor(db, dir, binary = '/usr/bin/codex') {
     this.db = db; this.dir = dir; this.binary = binary; this.loginState = null; this.active = null;
     this.authOperation = null; this.authEpoch = 0;
-    db.prepare("UPDATE analyses SET status='interrupted', error='Сервис перезапущен. Исход предыдущей попытки неизвестен; сохранённые результаты доступны.', updated=? WHERE status IN ('primary','review','queued')").run(now());
+    db.prepare("UPDATE analyses SET status='interrupted', error='Сервис перезапущен. Исход предыдущей попытки неизвестен; сохранённые результаты доступны.', updated=? WHERE status IN ('qualification','primary','contract_risks','legal_modules','review','queued')").run(now());
   }
   home() { return join(this.dir, 'codex', 'application'); }
   async initLookup(runtime) {
@@ -71,7 +72,7 @@ export class CodexRunner {
     this.authOperation = 'logout'; this.authEpoch++;
     try {
       const login = this.loginState; this.loginState = null;
-      this.db.prepare("UPDATE analyses SET status='cancelled',error='Общее подключение Codex отключено владельцем приложения',updated=? WHERE status IN ('queued','primary','review')").run(now());
+      this.db.prepare("UPDATE analyses SET status='cancelled',error='Общее подключение Codex отключено владельцем приложения',updated=? WHERE status IN ('queued','qualification','primary','contract_risks','legal_modules','review')").run(now());
       this.temporary?.cancelAll();
       // Wait for every credential writer to stop before removing the shared login.
       await Promise.all([stopChild(login?.child), stopChild(this.active?.child)]);
@@ -93,7 +94,7 @@ export class CodexRunner {
     }
     const lookup = stage === 'organization';
     const review = stage === 'review';
-    const { prompt, schema: outputSchema, base } = analysisRequest(snapshot, stage, primary);
+    const { prompt, schema: outputSchema, base } = analysisRequest(snapshot, stage, primary, context.preliminaryQualifications);
     const schemaPath = join(cwd, 'schema.json'); await writeFile(schemaPath, JSON.stringify(outputSchema), { mode: 0o600 });
     const args = ['exec','--ignore-user-config','--ignore-rules','--ephemeral','--skip-git-repo-check','--sandbox','read-only','--json','--color','never','--output-schema',schemaPath,'-C',cwd,'-c','approval_policy="never"','-c','forced_login_method="chatgpt"','-c','cli_auth_credentials_store="file"','-c',lookup ? 'web_search="live"' : 'web_search="disabled"'];
     for (const feature of disabled.filter(f=>!lookup||f!=='code_mode_host')) args.push('--disable', feature);
@@ -103,7 +104,7 @@ export class CodexRunner {
     // Stable first, variable last: instructions, rules and profile repeat across every
     // run, the documents do not. Whether the provider caches that prefix is measured,
     // not assumed; the order costs nothing either way.
-    const alive = context.alive || (() => ['primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
+    const alive = context.alive || (() => ['queued','qualification','primary','contract_risks','legal_modules','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     if (this.closing || epoch !== this.authEpoch || this.authOperation === 'logout' || !alive()) throw new Error('Анализ отменён или подключение Codex отключено.');
     const startedAt = Date.now();
     return await new Promise((resolve, reject) => {
@@ -128,6 +129,7 @@ export class CodexRunner {
           if(lookup)context.onEventSummary?.(events.map(e=>({type:e.type,itemType:e.item?.type,keys:Object.keys(e),itemKeys:Object.keys(e.item||{}),warning:e.item?.type==='error'?String(e.item.message).slice(0,1200).replace(/(?:sk-|eyJ)[A-Za-z0-9_.-]+/g,'[redacted]'):undefined})));
           if (!alive() || epoch !== this.authEpoch || this.closing) throw new Error('Запрос отменён.');
           if(lookup)return resolve(lookupResult(answer,snapshot.inn,events));
+          if (stage === 'qualification') return resolve(validateQualifications(answer, snapshot));
           const result = resultSources(validateResult(review ? parseReview(base, answer) : answer, snapshot, stage),snapshot,context.temporary?null:analysis);
           const session = events.find(e => e.type === 'thread.started')?.thread_id ?? null;
           const usage = events.find(e => e.type === 'turn.completed')?.usage ?? null;
@@ -209,22 +211,86 @@ export class CodexRunner {
       if (temporary && (!job || temporary.queuedAt < job.created)) { await this.temporary.run(temporary); return; }
       if (!job) return;
       const snapshot = JSON.parse(job.snapshot); let primary = job.primary_result && JSON.parse(job.primary_result);
-      const stillActive = () => !this.closing && ['queued','primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(job.id)?.status);
+      const progressive = snapshot.analysisContractVersion === 'legal-v2' && job.progress;
+      const stillActive = () => !this.closing && (progressive ? ['queued','qualification','primary','contract_risks','legal_modules','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(job.id)?.status) : ['queued','primary','review'].includes(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(job.id)?.status));
+      const progressEvent = (event, status) => {
+        if (!progressive) return;
+        const before = JSON.parse(this.db.prepare('SELECT progress FROM analyses WHERE id=?').get(job.id).progress);
+        const after = applyProgressEvent(before, event);
+        this.db.prepare('UPDATE analyses SET progress=?,status=?,updated=? WHERE id=?').run(JSON.stringify(after), status, event.at, job.id);
+      };
+      const phase = async (name, status) => progressEvent({ id: `${job.id}:${name}:start:${randomUUID()}`, type:'phase_started', phase:name, at:now() }, status);
+      const phaseResult = (name, output, status) => progressEvent({ id: `${job.id}:${name}:result:${randomUUID()}`, type:'phase_result', phase:name, output, at:now() }, status);
+      const phaseFailed = (name, error) => {
+        try {
+          const at = now();
+          progressEvent({ id: `${job.id}:${name}:failed:${randomUUID()}`, type:'phase_failed', phase:name, error:{ code:'MODEL_FAILED', message:error.message, retryable:true }, at }, 'error');
+          this.db.prepare('UPDATE analyses SET error=? WHERE id=?').run(error.message, job.id);
+        } catch { /* preserve original failure */ }
+      };
       try {
+        if (progressive && primary) {
+          const seeded = JSON.parse(this.db.prepare('SELECT progress FROM analyses WHERE id=?').get(job.id).progress);
+          if (seeded.phases.qualification.status === 'pending') {
+            await phase('qualification','qualification');
+            phaseResult('qualification', { qualifications: primary.qualifications || [] }, 'running');
+            await phase('contract_risks','contract_risks');
+            phaseResult('contract_risks', { qualifications: primary.qualifications || [], findings: primary.findings || [] }, 'running');
+            await phase('legal_modules','legal_modules');
+            const selected = new Set((primary.qualifications || []).flatMap(item => item.legalModules || []));
+            const modules = (snapshot.legal?.modules || []).filter(module => selected.has(module.id));
+            phaseResult('legal_modules', { qualifications: primary.qualifications || [], findings: primary.findings || [], legalModules: modules }, 'review');
+          }
+        }
         if (!primary) {
-          this.db.prepare("UPDATE analyses SET status='primary',updated=? WHERE id=?").run(now(), job.id);
-          primary = await this.execute(job.user_id, job.id, snapshot, 'primary');
+          if (progressive) {
+            await phase('qualification','qualification');
+            const qualification = await this.execute(job.user_id, job.id, snapshot, 'qualification', null, { preliminaryQualifications:null });
+            if (!stillActive()) return;
+            phaseResult('qualification', { qualifications: qualification.qualifications }, 'running');
+            await phase('contract_risks','contract_risks');
+            primary = await this.execute(job.user_id, job.id, snapshot, 'primary', null, { preliminaryQualifications: qualification.qualifications });
+            if (!stillActive()) return;
+            phaseResult('contract_risks', { qualifications: primary.qualifications, findings: primary.findings }, 'running');
+            await phase('legal_modules','legal_modules');
+            const selected = new Set(primary.qualifications.flatMap(item => item.legalModules));
+            const modules = (snapshot.legal?.modules || []).filter(module => selected.has(module.id));
+            phaseResult('legal_modules', { qualifications: primary.qualifications, findings: primary.findings, legalModules: modules }, 'review');
+          } else {
+            this.db.prepare("UPDATE analyses SET status='primary',updated=? WHERE id=?").run(now(), job.id);
+            primary = await this.execute(job.user_id, job.id, snapshot, 'primary');
+          }
           if (!stillActive()) return;
           this.db.prepare("UPDATE analyses SET primary_result=?,status='review',updated=? WHERE id=?").run(JSON.stringify(primary), now(), job.id);
         }
         if (!stillActive()) return;
-        this.db.prepare("UPDATE analyses SET status='review',updated=? WHERE id=?").run(now(), job.id);
+        if (progressive) await phase('review','review');
+        else this.db.prepare("UPDATE analyses SET status='review',updated=? WHERE id=?").run(now(), job.id);
         const reviewed = await this.execute(job.user_id, job.id, snapshot, 'review', primary);
         if (!stillActive()) return;
+        if (progressive) {
+          const before = new Map(primary.findings.map(item => [item.id, item]));
+          const after = new Map(reviewed.findings.map(item => [item.id, item]));
+          const decisions = primary.findings.map(item => {
+            const next = after.get(item.id);
+            if (!next) return { id:item.id, verdict:'rejected', reason:'Отклонено ревьюером.' };
+            const changed = JSON.stringify({...item, review:undefined}) !== JSON.stringify({...next, review:undefined});
+            return { id:item.id, verdict:changed?'corrected':'confirmed', reason:changed?'Уточнено ревьюером.':'Подтверждено ревьюером.', ...(changed?{patch:next}:{}) };
+          });
+          phaseResult('review', { findings: reviewed.findings, decisions }, 'awaiting_finalization');
+          progressEvent({ id:`${job.id}:final:${randomUUID()}`, type:'analysis_finalized', at:now() }, 'complete');
+        }
         this.db.prepare("UPDATE analyses SET review_result=?,status='complete',error=NULL,updated=? WHERE id=?").run(JSON.stringify(reviewed), now(), job.id);
         audit(this.db, job.user_id, job.contract_id, 'Анализ и ревью завершены', job.id);
       } catch (e) {
-        if (stillActive()) this.db.prepare("UPDATE analyses SET status='error',error=?,updated=? WHERE id=?").run(e.message, now(), job.id);
+        if (stillActive()) {
+          if (progressive) {
+            const current = this.db.prepare('SELECT progress FROM analyses WHERE id=?').get(job.id).progress;
+            const state = JSON.parse(current); const running = Object.entries(state.phases).find(([, value]) => value.status === 'running')?.[0];
+            if (running) phaseFailed(running, e);
+            else this.db.prepare("UPDATE analyses SET status='error',error=?,updated=? WHERE id=?").run(e.message, now(), job.id);
+          } else this.db.prepare("UPDATE analyses SET status='error',error=?,updated=? WHERE id=?").run(e.message, now(), job.id);
+        }
       }
     } finally { this.busy = false; }
   }

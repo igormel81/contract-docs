@@ -2,7 +2,7 @@
 // «Высокая» в форме, «Высокий риск» в разовой проверке и «высокая» в тексте письма.
 export const severityLabels = { high:'Высокая', medium:'Средняя', low:'Низкая' };
 export const coverageLabels = { checked:'Проверено', needs_data:'Нужны данные', not_applicable:'Не применимо' };
-export const stageLabels = { queued:'В очереди', primary:'Первичный анализ', review:'Независимое ревью', complete:'Ревью завершено', error:'Ошибка этапа', interrupted:'Прервано', cancelled:'Отменено' };
+export const stageLabels = { queued:'В очереди', qualification:'Определение типа договора', contract_risks:'Договорные риски', legal_modules:'Нормативная проверка', primary:'Первичный анализ', review:'Независимое ревью', complete:'Ревью завершено', error:'Ошибка этапа', interrupted:'Прервано', cancelled:'Отменено' };
 export const legalStatusLabels = {reference_only:'Редакция требует проверки',verified:'Редакция подтверждена',stale:'Срок проверки истёк',unavailable:'Корпус недоступен'};
 export function legalReferences(items=[],esc) {
   if(!items.length)return '';
@@ -100,4 +100,10 @@ export function clauseDiff(older, newer, files) {
   }
   for(const item of before) if(!used.has(item)) rows.push({state:'gone',item:null,was:item});
   return rows;
+}
+export function qualificationView(progress, esc) {
+  const items = progress?.results?.qualifications || [];
+  if (!items.length) return '';
+  const names = { works:'Подряд', services:'Услуги', software_creation:'Создание ПО', exclusive_right_assignment:'Передача исключительного права', license:'Лицензия', mixed:'Смешанный договор', equipment_supply:'Поставка оборудования', procurement_44fz:'Закупка по 44-ФЗ', procurement_223fz:'Закупка по 223-ФЗ' };
+  return `<details class="flow"><summary>Определены обязательства · ${items.length}</summary><p class="muted">Предварительная квалификация; уточняется при анализе и ревью.</p>${items.map(item=>`<div><p><strong>${esc(names[item.type] || item.type)}</strong>${item.note ? ': '+esc(item.note) : ''}</p>${(item.sources || []).map(source=>`<blockquote>${esc(source.quote)}</blockquote>`).join('')}</div>`).join('')}</details>`;
 }

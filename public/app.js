@@ -1,7 +1,7 @@
 import { OrganizationUI } from './organizations.js';
 import { QuickUI } from './quick.js';
-import { sourceLabel, documentText, compactPassport, locationLabel, findingKey, severityLabels, coverageLabels, stageLabels, clauseDiff, legalReferences, legalStatusLabels, legalSnapshotLabel, wordDiff } from './document-ui.js';
-import { messageParts } from './summary.js';
+import { qualificationView, sourceLabel, documentText, compactPassport, locationLabel, findingKey, severityLabels, coverageLabels, stageLabels, clauseDiff, legalReferences, legalStatusLabels, legalSnapshotLabel, wordDiff } from './document-ui.js';
+import { canShareSummary, messageParts, summaryMailto } from './summary.js';
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const state = { user:null, boot:null, contract:null, contractId:null, revisionId:null, runId:null, center:'set', kind:'contract', customer:'', queues:new Map(), selections:new Map(), source:null, risk:null, form:null, loginMode:'login', query:'', drafts:new Map(), summary:null, findingFilter:'all', openFindings:new Set(), inspectorOpen:false, inspectorWide:false, drawerOpen:false };
@@ -42,8 +42,9 @@ async function refreshContract() { if(state.contractId){state.contract=await api
 async function openContract(id) { state.inspectorOpen=false;state.findingFilter='all'; state.sourceDocuments=null;state.summary=null;state.contractId=id;state.revisionId=null;state.runId=null;state.source=null;state.risk=null;state.form=null;await refreshContract();state.center=state.contract.revisions.length?'passport':'set';history.replaceState(null,'','#'+id);render(); }
 function summaryPanel(a) {
   const s=state.summary; if(!s||s.analysisId!==a.id)return '';
-  const parts=messageParts(s.text), manager=state.contract.manager;
-  return `<section class="flow summary-panel"><div class="row between"><h3>Текст для менеджера</h3>${btn('Закрыть','summary-close','','quiet compact-action')}</div><p class="muted">Собран из сохранённого результата без обращения к модели. Текст содержит условия договора: отправляя его в мессенджер или почту, вы выносите их за пределы контролируемого контура.</p><div class="row">${btn(s.full?'Короткая сводка':'Все замечания','summary-scope','','compact-action')}${btn('Скопировать','summary-copy','','primary compact-action')}<a class="compact-action" href="/docs/api/analyses/${a.id}/summary?scope=${s.full?'full':'short'}&download=1">Скачать .txt</a>${btn(manager?'Открыть письмо':'Указать ответственного','summary-mail','','compact-action')}</div>${parts.length>1?`<p class="warning">Для мессенджера текст разбит на ${parts.length} части: копируйте и отправляйте по одной.</p><div class="row">${parts.map((_,i)=>btn('Копировать '+(i+1)+'/'+parts.length,'summary-copy',i,'quiet compact-action')).join('')}</div>`:''}<label class="sr-only" for="summary-text">Текст замечаний</label><textarea id="summary-text" readonly rows="14">${esc(s.text)}</textarea><small>${manager?'Ответственный: '+esc(manager):'Ответственный не указан'} · ${s.text.length} знаков</small></section>`;
+  const parts=messageParts(s.text), manager=state.contract.manager, findingCount=result()?.findings.length||0;
+  const share=canShareSummary(globalThis.navigator)?btn('Поделиться','summary-share','','compact-action'):'';
+  return `<section class="flow summary-panel" aria-labelledby="manager-summary-title"><div class="row between"><h3 id="manager-summary-title">Текст для менеджера</h3>${btn('Закрыть','summary-close','','quiet compact-action')}</div><p class="muted" id="manager-summary-help"><strong>Включены все замечания: ${findingCount}.</strong> Текст собран из сохранённого результата без обращения к модели. Он содержит условия договора: отправляя его в мессенджер или почту, вы выносите их за пределы контролируемого контура.</p><div class="row summary-actions" role="group" aria-label="Действия с полным текстом замечаний">${btn('Скопировать всё','summary-copy','','primary compact-action')}<a class="compact-action" href="/docs/api/analyses/${a.id}/summary?scope=full&download=1" download>Скачать TXT</a>${btn('Отправить по почте','summary-mail','','compact-action')}${share}</div>${parts.length>1?`<p class="warning">Для мессенджера текст разбит на ${parts.length} части: копируйте и отправляйте по одной.</p><div class="row" role="group" aria-label="Части текста для мессенджера">${parts.map((_,i)=>btn('Копировать '+(i+1)+'/'+parts.length,'summary-copy',i,'quiet compact-action')).join('')}</div>`:''}<label class="sr-only" for="summary-text">Полный текст замечаний</label><textarea id="summary-text" aria-describedby="manager-summary-help" readonly rows="14">${esc(s.text)}</textarea><div class="row between"><small>${manager?'Ответственный: '+esc(manager):'Ответственный не указан'} · ${s.text.length} знаков</small>${btn(manager?'Изменить ответственного':'Указать ответственного','summary-manager','','quiet compact-action')}</div></section>`;
 }
 function candidates() {
   const c=state.contract,a=analysis(),r=result();
@@ -80,7 +81,7 @@ function sidebar() {
 }
 function context() {
   const c=state.contract,customer=state.boot.customers.find(x=>x.id===c.customer_id),organization=state.boot.profiles[c.contractor];
-  return `<header class="context contract-context"><div class="contract-heading">${btn('К договорам','catalog-back','','quiet compact-action mobile-back')}<p>${esc(customer?.name||'Библиотека шаблонов')}</p><h1>${esc(c.title)}</h1><div class="contract-organization"><span>Подрядчик: <strong>${esc(organization?.name||'не выбран')}</strong></span>${btn(organization?'Изменить':'Выбрать организацию','change-contractor','','quiet compact-action')}</div></div><div class="context-actions"><label class="sr-only" for="revision-select">Редакция</label><select id="revision-select"><option value="">Без редакции</option>${c.revisions.map(r=>`<option value="${r.id}" ${r.id===state.revisionId?'selected':''}>v${r.number}${c.effective_id===r.id?' · действует':''}</option>`).join('')}</select>${btn(c.analyses.some(a=>a.revision_id===state.revisionId)?'Проверить повторно':'Проверить','analyze','','primary',!state.revisionId||c.analyses.some(a=>a.revision_id===state.revisionId&&['queued','primary','review'].includes(a.status)))}</div></header>`;
+  return `<header class="context contract-context"><div class="contract-heading">${btn('К договорам','catalog-back','','quiet compact-action mobile-back')}<p>${esc(customer?.name||'Библиотека шаблонов')}</p><h1>${esc(c.title)}</h1><div class="contract-organization"><span>Подрядчик: <strong>${esc(organization?.name||'не выбран')}</strong></span>${btn(organization?'Изменить':'Выбрать организацию','change-contractor','','quiet compact-action')}</div></div><div class="context-actions"><label class="sr-only" for="revision-select">Редакция</label><select id="revision-select"><option value="">Без редакции</option>${c.revisions.map(r=>`<option value="${r.id}" ${r.id===state.revisionId?'selected':''}>v${r.number}${c.effective_id===r.id?' · действует':''}</option>`).join('')}</select>${btn(c.analyses.some(a=>a.revision_id===state.revisionId)?'Проверить повторно':'Проверить','analyze','','primary',!state.revisionId||c.analyses.some(a=>a.revision_id===state.revisionId&&['queued','qualification','primary','contract_risks','legal_modules','review'].includes(a.status)))}</div></header>`;
 }
 function uploadView() {
   const c=state.contract,q=queue(), selected=chosen(); const blocked=q.some(x=>x.status==='uploading'||x.status==='selected'||(x.similar?.length&&!x.decision));
@@ -184,7 +185,7 @@ function analysisView() {
   return compactAnalysis(a,r);
 }
 function compactAnalysis(a,r) {
-  const rev=state.contract.revisions.find(v=>v.id===a.revision_id),running=['queued','primary','review'].includes(a.status);
+  const rev=state.contract.revisions.find(v=>v.id===a.revision_id),running=['queued','qualification','primary','contract_risks','legal_modules','review'].includes(a.status);
   const saved=f=>state.contract.recommendations.find(x=>x.analysis_id===a.id&&x.finding_id===f.id);
   const unresolved=f=>!saved(f)||saved(f).status==='draft';
   const filtered=(r?.findings||[]).map((f,index)=>({f,index})).filter(({f})=>state.findingFilter==='high'?f.severity==='high':state.findingFilter==='unresolved'?unresolved(f):true);
@@ -193,7 +194,7 @@ function compactAnalysis(a,r) {
     const key=a.id+':'+f.id,edit=state.drafts.get(key)||saved(f),decision=saved(f)?.status,dirty=state.drafts.has(key);
     return `<article class="finding"><details class="finding-disclosure" data-finding-key="${esc(key)}" ${state.openFindings.has(key)?'open':''}><summary><span class="finding-heading">${badge(labels[f.severity],f.severity)}<strong>${esc(f.title)}</strong><small>${dirty?'Не сохранено':decision==='planned'?'В плане правок':decision==='rejected'?'Отклонено':'Без решения'}</small></span></summary><div class="finding-body flow"><div class="row">${badge(f.rule)}${badge(f.review==='primary'?'Без ревью':f.review==='added'?'Добавлено ревьюером':f.review==='corrected'?'Исправлено':'Подтверждено')}${state.contract.kind==='contract'?btn('В реестр рисков','finding-risk',index,'compact-action'):''}</div><p>${esc(f.description)}</p>${legalReferences(f.legalSources,esc)}<form data-form="recommendation" data-draft-key="${esc(key)}" data-index="${index}" class="flow"><label>Предлагаемая формулировка<textarea name="text" required maxlength="15000">${esc(edit?.text??f.proposal)}</textarea></label>${select('status','Решение',[['draft','Черновик'],['planned','В плане правок'],['rejected','Отклонено']],edit?.status||'draft')}<div class="error" role="alert"></div><div class="decision-actions"><button type="submit" class="primary compact-action">Сохранить решение</button>${btn(edit?.text||f.proposal?'Предложить заново':'Предложить формулировку','propose',index,'quiet compact-action')}</div></form></div></details><div class="finding-sources">${sources(f.sources)}</div></article>`;
   };
-  return `<div class="flow analysis-result" data-result-key="${a.id}"><div class="row between"><h2>Анализ и рекомендации</h2>${r?btn('Текст для менеджера','summary-open','','compact-action'):''}</div><div class="row between" role="status">${badge(labels[a.status],a.status==='error'?'high':a.status==='complete'?'good':'medium')}<small>v${rev?.number} · ${date(a.created)}${running?' · прошло '+Math.max(0,Math.floor((Date.now()-Date.parse(a.created))/60000))+' мин':''}</small></div>${a.revision_id!==state.revisionId?'<div class="warning">Этот анализ относится к другой редакции.</div>':''}${running?`<div class="step-line"><div class="step ${a.primary_result?'done':a.status==='primary'?'running':''}">1. Аналитик · ${a.primary_result?'готово':a.status==='primary'?'в работе':'ожидается'}</div><div class="step ${a.status==='review'?'running':''}">2. Ревьюер · ${a.status==='review'?'в работе':'ожидается'}</div></div><div class="row"><small>Можно продолжить работу с другими договорами.</small>${btn('Отменить анализ','cancel-analysis',a.id,'quiet compact-action')}</div>`:''}${a.error?`<div class="error" role="alert">${esc(a.error)}</div>${['error','interrupted'].includes(a.status)?btn('Повторить этап','retry-analysis',a.id):''}`:''}${r?`${!a.review_result?'<p class="warning">Первичный результат: независимое ревью ещё не завершено.</p>':''}<small class="legal-status">${esc(legalSnapshotLabel(a.legal))}</small>${summaryPanel(a)}<div class="findings-toolbar"><strong>Замечания: ${count} · без решения: ${remaining}</strong><div class="row" role="group" aria-label="Фильтр замечаний">${[['all','Все'],['high','Высокая критичность'],['unresolved','Без решения']].map(([v,t])=>btn(t,'finding-filter',v,'compact-action '+(state.findingFilter===v?'active':''))).join('')}</div></div>${filtered.map(finding).join('')||`<p class="muted">${count?'Нет замечаний по выбранному фильтру.':'Замечания не сформированы. Учитывайте ограничения проверки.'}</p>`}<details class="analysis-limitations"><summary>Ограничения проверки · ${r.limitations.length}</summary><div class="warning">${r.limitations.map(esc).join('<br>')}</div><p class="muted">План правок не означает согласия заказчика.</p></details><details><summary>Покрытие критериев</summary>${r.coverage.map(c=>`<p><strong>${esc(c.rule)}</strong> · ${esc(coverageLabels[c.status]||c.status)}<br>${esc(c.note)}</p>`).join('')}</details>${r.changes.length?`<details><summary>Изменения ревьюера</summary>${r.changes.map(x=>`<p>${esc(x)}</p>`).join('')}</details>`:''}<a class="compact-action" href="/docs/api/analyses/${a.id}/export">Скачать результат JSON</a>`:'<p class="muted">Результат появится после завершения этапа.</p>'}</div>`;
+  return `<div class="flow analysis-result" data-result-key="${a.id}"><div class="row between"><h2>Анализ и рекомендации</h2>${r?btn('Текст для менеджера','summary-open','','compact-action'):''}</div><div class="row between" role="status">${badge(labels[a.status],a.status==='error'?'high':a.status==='complete'?'good':'medium')}<small>v${rev?.number} · ${date(a.created)}${running?' · прошло '+Math.max(0,Math.floor((Date.now()-Date.parse(a.created))/60000))+' мин':''}</small></div>${a.revision_id!==state.revisionId?'<div class="warning">Этот анализ относится к другой редакции.</div>':''}${running?`<div class="step-line"><div class="step ${a.primary_result?'done':a.status==='primary'?'running':''}">1. Аналитик · ${a.primary_result?'готово':a.status==='primary'?'в работе':'ожидается'}</div><div class="step ${a.status==='review'?'running':''}">2. Ревьюер · ${a.status==='review'?'в работе':'ожидается'}</div></div><div class="row"><small>Можно продолжить работу с другими договорами.</small>${btn('Отменить анализ','cancel-analysis',a.id,'quiet compact-action')}</div>`:''}${qualificationView(a.progress,esc)}${a.error?`<div class="error" role="alert">${esc(a.error)}</div>${['error','interrupted'].includes(a.status)?btn('Повторить этап','retry-analysis',a.id):''}`:''}${r?`${!a.review_result?'<p class="warning">Первичный результат: независимое ревью ещё не завершено.</p>':''}<small class="legal-status">${esc(legalSnapshotLabel(a.legal))}</small>${summaryPanel(a)}<div class="findings-toolbar"><strong>Замечания: ${count} · без решения: ${remaining}</strong><div class="row" role="group" aria-label="Фильтр замечаний">${[['all','Все'],['high','Высокая критичность'],['unresolved','Без решения']].map(([v,t])=>btn(t,'finding-filter',v,'compact-action '+(state.findingFilter===v?'active':''))).join('')}</div></div>${filtered.map(finding).join('')||`<p class="muted">${count?'Нет замечаний по выбранному фильтру.':'Замечания не сформированы. Учитывайте ограничения проверки.'}</p>`}<details class="analysis-limitations"><summary>Ограничения проверки · ${r.limitations.length}</summary><div class="warning">${r.limitations.map(esc).join('<br>')}</div><p class="muted">План правок не означает согласия заказчика.</p></details><details><summary>Покрытие критериев</summary>${r.coverage.map(c=>`<p><strong>${esc(c.rule)}</strong> · ${esc(coverageLabels[c.status]||c.status)}<br>${esc(c.note)}</p>`).join('')}</details>${r.changes.length?`<details><summary>Изменения ревьюера</summary>${r.changes.map(x=>`<p>${esc(x)}</p>`).join('')}</details>`:''}<a class="compact-action" href="/docs/api/analyses/${a.id}/export">Скачать результат JSON</a>`:'<p class="muted">Результат появится после завершения этапа.</p>'}</div>`;
 }
 function riskView() {
   const c=state.contract;if(!c)return '<p class="muted">Выберите договор.</p>';
@@ -305,10 +306,10 @@ async function uploadRow(row,contractId) {
   }catch(e){row.status='error';row.message=e.message;}
   if(state.contractId===contractId)render();
 }
-async function loadSummary(analysisId,full){
-  const response=await fetch(`/docs/api/analyses/${analysisId}/summary?scope=${full?'full':'short'}`,{headers:{'X-Docs-Request':'1'}});
+async function loadSummary(analysisId){
+  const response=await fetch(`/docs/api/analyses/${analysisId}/summary?scope=full`,{headers:{'X-Docs-Request':'1'}});
   if(!response.ok){let message='Не удалось собрать текст замечаний.';try{message=(await response.json()).error||message;}catch{ /* Plain error body */ }throw new Error(message);}
-  state.summary={analysisId,full,text:await response.text()};
+  state.summary={analysisId,text:await response.text()};
 }
 async function addFiles(files){const contractId=state.contractId;if(!contractId){notice('Сначала создайте или выберите договор.');return;}chosen();const rows=Array.from(files).map(file=>({file,status:'selected',message:'Ожидает загрузки'}));const existing=state.queues.get(contractId)||[];state.queues.set(contractId,[...existing,...rows]);render();for(const row of rows)await uploadRow(row,contractId);}
 document.addEventListener('click',async event=>{
@@ -376,20 +377,27 @@ document.addEventListener('click',async event=>{
     if(action==='retry-analysis'){await api('/analyses/'+value+'/retry',{});await refreshContract();state.source=null;state.sourceDocuments=null;state.runId=state.contract.analyses[0].id;state.center='analysis';notice('Создана новая попытка. История сохранена.');}
     if(action==='cancel-analysis'){await api('/analyses/'+value+'/cancel',{});await refreshContract();}
     if(action==='run'){state.source=null;state.sourceDocuments=null;state.runId=value;state.center='analysis';}
-    if(action==='summary-open'){await loadSummary(analysis().id,false);focusSummary=true;}
-    if(action==='summary-scope'){await loadSummary(state.summary.analysisId,!state.summary.full);focusSummary=true;}
+    if(action==='summary-open'){await loadSummary(analysis().id);focusSummary=true;}
     if(action==='summary-close')state.summary=null;
+    if(action==='summary-manager'){state.form={type:'manager'};render();return;}
     if(action==='summary-copy'){
       const text=value===''?state.summary.text:messageParts(state.summary.text)[Number(value)];
-      try{await navigator.clipboard.writeText(text);notice('Текст скопирован в буфер обмена.');}
+      try{await navigator.clipboard.writeText(text);notice(value===''?'Все замечания скопированы в буфер обмена.':'Часть текста скопирована в буфер обмена.');}
       catch{const area=$('#summary-text');if(area){area.focus();area.select();}notice('Копирование в буфер недоступно: скопируйте выделенный текст сочетанием клавиш.');}
       button.disabled=false;return;
     }
     if(action==='summary-mail'){
-      if(!state.contract.manager){state.form={type:'manager'};render();return;}
-      const body=state.summary.text.slice(0,1800);
-      window.location.href=`mailto:${encodeURIComponent(state.contract.manager)}?subject=${encodeURIComponent('Замечания по договору: '+state.contract.title)}&body=${encodeURIComponent(body)}`;
-      if(body.length<state.summary.text.length)notice('В письмо вставлено начало текста: длинное тело письма почтовый клиент обрезает. Полный текст — кнопкой «Скопировать».');
+      window.location.href=summaryMailto({manager:state.contract.manager,title:state.contract.title,text:state.summary.text});
+      button.disabled=false;return;
+    }
+    if(action==='summary-share'){
+      try{
+        await navigator.share({title:'Замечания по договору: '+state.contract.title,text:state.summary.text});
+      }catch(e){
+        if(e?.name==='AbortError'){button.disabled=false;return;}
+        try{await navigator.clipboard.writeText(state.summary.text);notice('Системное меню недоступно. Все замечания скопированы в буфер обмена.');}
+        catch{const area=$('#summary-text');if(area){area.focus();area.select();}notice('Системное меню и буфер обмена недоступны. Полный текст выделен — скопируйте его сочетанием клавиш.');}
+      }
       button.disabled=false;return;
     }
     if(action==='propose'){
@@ -474,7 +482,7 @@ setInterval(async()=>{
     if(state.center==='quick'&&!quick.batch){const before=JSON.stringify(quick.packet);await quick.refresh();if(before!==JSON.stringify(quick.packet))render();}
     const connection=await api('/codex');
     if(JSON.stringify(connection)!==JSON.stringify(state.boot.codex)&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){state.boot.codex=connection;render();}
-    if(state.contract?.analyses.some(a=>['queued','primary','review'].includes(a.status))&&!state.form&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){await refreshContract();render();}
+    if(state.contract?.analyses.some(a=>['queued','qualification','primary','contract_risks','legal_modules','review'].includes(a.status))&&!state.form&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){await refreshContract();render();}
   }catch{ /* Keep last confirmed data. Explicit actions surface errors. */ }
 },4000);
 try{state.user=await api('/me');await refreshBoot();const fromHash=location.hash.slice(1);if(fromHash==='quick'){state.center='quick';await quick.open();render();}else if(state.boot.contracts.some(c=>c.id===fromHash))await openContract(fromHash);else render();}catch{render();}
