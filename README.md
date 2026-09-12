@@ -2,7 +2,7 @@
 
 Веб-приложение для проверки договоров и приложений в PDF, DOC и DOCX: двухэтапный LLM-анализ с отдельным ревью, рекомендации по изменению условий, сравнение редакций и отслеживание договорных рисков со ссылками на исходные пункты. Текущая версия — пилот 0.3.3.
 
-**Contract Docs** is a self-hosted contract review and risk management web application for Russian-language contracts. It supports PDF, DOC and DOCX, two-stage LLM analysis with a separate review, clause-level citations, amendment suggestions, document version comparison and risk mitigation tracking. Built with Node.js and SQLite; the active analysis runner uses Codex CLI. Version 0.3.3 includes tested local-provider, OCR and signed legal-package foundations, but does not yet expose a local-model switch in the application.
+**Contract Docs** is a self-hosted contract review and risk management web application for Russian-language contracts. It supports PDF, DOC and DOCX, two-stage LLM analysis with a separate review, clause-level citations, amendment suggestions, document version comparison and risk mitigation tracking. Built with Node.js and SQLite; the deployed 0.3.3 pilot uses Codex CLI. The working tree also wires an alternate local-model runner behind a startup-only `DOCS_MODEL_PROVIDER` setting (mock-tested, not deployed, not switchable at runtime); OCR and signed legal-package foundations remain tested modules not yet exposed in the application.
 
 [Сервис / Web app](https://igoruan.ru/docs/) · [Установка / Deployment](references/local-deployment.md) · [Архитектура / Architecture](<specs/(sep-26)-on-premise-architecture.md>) · [История выпусков / Changelog](changelog/README.md)
 
@@ -21,7 +21,7 @@
 - [Руководство по развёртыванию](references/local-deployment.md) — пошаговая установка текущей версии и границы проекта локальных моделей. Публичная страница: `/docs/local-installation/`.
 - Публичная поставка: `npm run docs:build`, затем после коммита `npm run source:bundle`. Архив собирается по списку разрешённых файлов без истории Git, данных и эксплуатационных конфигураций. `public/downloads/` не хранится в Git.
 
-- [Локальная установка в организации с локальными моделями](<specs/(sep-26)-on-premise-architecture.md>) — существующая архитектура, целевой контур без внешней передачи документов, требования к инфраструктуре и этапы перехода. Изолированный inference-провайдер реализован как модуль и протестирован на синтетическом сервере, но ещё не подключён к рабочему runner и интерфейсу.
+- [Локальная установка в организации с локальными моделями](<specs/(sep-26)-on-premise-architecture.md>) — существующая архитектура, целевой контур без внешней передачи документов, требования к инфраструктуре и этапы перехода. Изолированный inference-провайдер реализован как модуль, протестирован на синтетическом сервере и подключён к runner'у за настройкой запуска `DOCS_MODEL_PROVIDER`; переключатель режима в самом интерфейсе и реальный vLLM/GPU-стенд ещё не готовы.
 - [Нормативная база: источники, проверка и обновление](<specs/(sep-26)-normative-base.md>) — подключённый справочный корпус, границы покрытия, неизменяемые снимки норм и серверная проверка цитат.
 - [История выпусков](changelog/README.md).
 
@@ -112,6 +112,8 @@ npm start
 Дополнительно: `npm run rules:eval` — ручной прогон фикстур правил через подключённый Codex (в `npm test` не входит, требует общего входа и расходует лимит); `node test/browser-center.mjs` с установленным puppeteer и `CHROME_BIN` — браузерная проверка компоновки на 1440/768/375 со снимками в `DOCS_UI_SCREENSHOTS`. Годится и системный Chrome: `CHROME_BIN="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`. Если прогон замирает на первом же клике, а страница при этом отвечает на `page.evaluate`, дело в самой сборке браузера, а не в приложении.
 
 По умолчанию приложение слушает только `127.0.0.1:3107`. Настройки: `DOCS_ORIGIN`, `DOCS_DATA`, `DOCS_PORT`, `DOCS_CODEX`. Изоляция извлечения включена по умолчанию. Только для локального HTTP-теста можно указать `DOCS_EXTRACT_SANDBOX=off`; HTTPS с этим параметром запрещён.
+
+`DOCS_MODEL_PROVIDER=codex` (по умолчанию) или `local` выбирает исполнитель анализа при старте процесса; переключение на живом инстансе не поддерживается. Для `local` нужны `DOCS_LOCAL_ENDPOINT`, `DOCS_LOCAL_MODEL`, `DOCS_LOCAL_MODEL_REVISION`, `DOCS_LOCAL_TOKENIZER_REVISION`, `DOCS_LOCAL_CHAT_TEMPLATE_FILE`, `DOCS_LOCAL_CHAT_TEMPLATE_SHA256`, `DOCS_LOCAL_CONTEXT_WINDOW`; это подключение проверено только mock-провайдером в `test/local-runner.test.mjs` и `test/local-provider.test.mjs`, не реальным vLLM-стендом (см. [план локальной установки](<plans/features/(sep-26)-local-installation.md>)).
 
 ## Общее подключение Codex
 
