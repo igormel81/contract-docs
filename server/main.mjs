@@ -9,6 +9,7 @@ import { HttpError, required, choice, hash, token, passwordHash, passwordMatches
 import { format, extract, similarity } from './documents.mjs';
 import { rules, instructionVersion } from './rules.mjs';
 import { CodexRunner } from './codex.mjs';
+import { LocalRunner } from './local-runner.mjs';
 import { Organizations, validInn } from './organizations.mjs';
 import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
@@ -35,6 +36,32 @@ function legalPackageConfiguration(options, dir) {
   const store = new LegalPackageStore({ directory: resolve(configured?.directory || process.env.DOCS_LEGAL_PACKAGES_DIR || join(dir, 'legal-packages')),
     trustedKeys: new Map(Object.entries(serialized)), reviewers: new Set(reviewers) });
   return { store, managers: new Set(reviewers) };
+}
+// One provider per running instance, fixed at startup: Codex remains the
+// default; a local inference server is an explicit administrator choice.
+// Switching modes on a live instance is not supported (plans/features/(sep-26)-local-installation.md, LOC-03).
+function modelProviderConfiguration(options) {
+  const kind = String(options.modelProvider ?? process.env.DOCS_MODEL_PROVIDER ?? 'codex').trim().toLowerCase();
+  if (kind === 'codex') return { kind };
+  if (kind !== 'local') throw new Error('DOCS_MODEL_PROVIDER должен быть "codex" или "local".');
+  const local = options.local || {};
+  if (local.provider) return { kind, config: { maxOutputTokens: local.maxOutputTokens, timeoutMs: local.timeoutMs }, runnerOptions: { provider: local.provider } };
+  const required = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new Error(`Локальный исполнитель: не задан ${name}.`); return value; };
+  const config = {
+    endpoint: required(local.endpoint ?? process.env.DOCS_LOCAL_ENDPOINT, 'DOCS_LOCAL_ENDPOINT'),
+    profile: 'vllm-chat',
+    model: required(local.model ?? process.env.DOCS_LOCAL_MODEL, 'DOCS_LOCAL_MODEL'),
+    modelRevision: required(local.modelRevision ?? process.env.DOCS_LOCAL_MODEL_REVISION, 'DOCS_LOCAL_MODEL_REVISION'),
+    tokenizerRevision: required(local.tokenizerRevision ?? process.env.DOCS_LOCAL_TOKENIZER_REVISION, 'DOCS_LOCAL_TOKENIZER_REVISION'),
+    chatTemplate: readFileSync(resolve(required(local.chatTemplateFile ?? process.env.DOCS_LOCAL_CHAT_TEMPLATE_FILE, 'DOCS_LOCAL_CHAT_TEMPLATE_FILE')), 'utf8'),
+    chatTemplateSha256: required(local.chatTemplateSha256 ?? process.env.DOCS_LOCAL_CHAT_TEMPLATE_SHA256, 'DOCS_LOCAL_CHAT_TEMPLATE_SHA256'),
+    contextWindow: Number(local.contextWindow ?? process.env.DOCS_LOCAL_CONTEXT_WINDOW),
+    apiKey: local.apiKey ?? process.env.DOCS_LOCAL_API_KEY ?? undefined,
+    temporaryPolicy: local.temporaryPolicy ?? process.env.DOCS_LOCAL_TEMPORARY_POLICY ?? undefined,
+    timeoutMs: local.timeoutMs ?? (process.env.DOCS_LOCAL_TIMEOUT_MS ? Number(process.env.DOCS_LOCAL_TIMEOUT_MS) : undefined),
+    maxOutputTokens: local.maxOutputTokens ?? undefined,
+  };
+  return { kind, config, runnerOptions: {} };
 }
 export async function createApp(options = {}) {
   const dir = resolve(options.dir || process.env.DOCS_DATA || join(root, 'data'));
@@ -65,7 +92,11 @@ export async function createApp(options = {}) {
   function requireCodexAdmin(user) {
     if (!canManageCodex(user)) throw new HttpError(403, 'Общим подключением Codex управляет владелец приложения.');
   }
-  const runner = new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
+  const modelProvider = modelProviderConfiguration(options);
+  const runner = modelProvider.kind === 'local'
+    ? new LocalRunner(db, dir, modelProvider.config, modelProvider.runnerOptions)
+    : new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
+  const inferencePin = () => runner.describe ? runner.describe() : null;
   const runtime = options.runtime || process.env.DOCS_RUNTIME || await mkdtemp(join(tmpdir(),'contract-docs-runtime-'));
   const organizations = new Organizations(db), lookups = new Map();
   await runner.initLookup(runtime);
@@ -376,7 +407,7 @@ export async function createApp(options = {}) {
           ?'ИНН выбранного подрядчика в тексте не найден, зато найден ИНН другого профиля. Проверьте, та ли сторона выбрана; вывод об интересах стороны сделай с этой оговоркой.'
           :'ИНН выбранного подрядчика в тексте не найден. Возможно, реквизиты не извлеклись или выбрана не та сторона: отрази это в ограничениях.';
         const key=id(), created=now();
-        const snapshot=withLegalContext({analysisContractVersion:'legal-v2',revisionId:rev.id,version:rev.number,kind:contract.kind,profile,contractorNote:sideNote,rules,instructionVersion,documents,created},new Date(),activeLegalCorpus());
+        const snapshot=withLegalContext({analysisContractVersion:'legal-v2',revisionId:rev.id,version:rev.number,kind:contract.kind,profile,contractorNote:sideNote,rules,instructionVersion,documents,created,inference:inferencePin()},new Date(),activeLegalCorpus());
         const progress=createProgressiveAnalysis({analysisId:key,at:created});
         db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,progress,created,updated) VALUES(?,?,?,?,?,?,?,?,?)').run(key,user.id,contract.id,rev.id,'queued',JSON.stringify(snapshot),JSON.stringify(progress),created,created);
         audit(db,user.id,contract.id,'Запущен анализ',`v${rev.number}${sideNote?'; '+sideNote:''}`); return send(res,202,{id:key,note:sideNote});

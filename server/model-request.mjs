@@ -11,7 +11,7 @@ export function analysisRequest(snapshot, stage, primary = null, preliminaryQual
   const lookup = stage === 'organization', review = stage === 'review', qualification = stage === 'qualification';
   const base = primary ? leanResult(primary) : null;
   if (review && !base) throw new Error('Для ревью нужен первичный результат.');
-  const { profile, rules: ruleSet, instructionVersion: setVersion, kind, ...material } = snapshot;
+  const { profile, rules: ruleSet, instructionVersion: setVersion, kind, inference, ...material } = snapshot;
   if (material.legal) material.legal = { ...material.legal, status: legalStatus(material.legal) };
   if (preliminaryQualifications?.length) material.preliminaryQualifications = preliminaryQualifications;
   const qualificationInstruction = `ЭТАП 0, КВАЛИФИКАЦИЯ. Быстро определи правовую модель каждого существенного обязательства до поиска рисков. Верни только qualifications. Каждая квалификация должна иметь точную цитату из договора; legalModules выбирай только из активных модулей снимка. Не создавай замечания и не делай вывод о нарушении на этом этапе.`;

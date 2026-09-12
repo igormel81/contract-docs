@@ -106,7 +106,7 @@ export class QuickChecks {
       if (!p.files.length||p.files.some(f=>f.status!=='ready')) throw new HttpError(400,'Загрузите читаемые документы; удалите файлы с ошибками перед запуском.');
       const documents=p.files.map(f=>({id:f.id,name:f.name,hash:f.hash,...f.extraction}));
       if (JSON.stringify(documents).length>360000) throw new HttpError(413,'Пакет слишком велик: максимум 360 000 символов.');
-      p.snapshot=p.snapshot||withLegalContext({analysisContractVersion:'legal-v2',version:1,kind:'contract',profile:p.profile,rules,instructionVersion,documents,created:now(),temporary:true},new Date(),this.legalCorpus());
+      p.snapshot=p.snapshot||withLegalContext({analysisContractVersion:'legal-v2',version:1,kind:'contract',profile:p.profile,rules,instructionVersion,documents,created:now(),temporary:true,inference:this.runner.describe?this.runner.describe():null},new Date(),this.legalCorpus());
       p.legal=p.snapshot.legal;
       p.progress=p.progress||createProgressiveAnalysis({analysisId:p.id,at:p.snapshot.created});
       p.status='queued';p.queuedAt=now();p.error=null;
@@ -129,7 +129,7 @@ export class QuickChecks {
         const done = (phase, output, status) => event({id:`${p.id}:${phase}:result:${id()}`,type:'phase_result',phase,output,at:now()}, status);
         if (progressive) {
           const phaseStatus = phase => p.progress.phases[phase].status;
-          let qualification = p.progress.result.qualifications;
+          let qualification = p.progress.results.qualifications;
           if (phaseStatus('qualification') !== 'completed') {
             start('qualification');
             qualification=await this.runner.execute(p.user,p.id,p.snapshot,'qualification',null,context('qualification'));

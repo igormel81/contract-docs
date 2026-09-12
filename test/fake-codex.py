@@ -86,7 +86,7 @@ elif review:
               'changes':['Проверен тестовый результат'],
               'qualifications': qualifications,
               'verdicts':[{'id':f['id'],'verdict':'confirmed','reason':'Цитата и пункт совпали с исходником.',
-                           'title':'','description':'','severity':'','proposal':'','sources':[]} for f in analyst['findings']],
+                           'title':'','description':'','severity':'','legalType':'','proposal':'','sources':[],'legalSources':[]} for f in analyst['findings']],
               'added':[]}
 else:
     output = {'summary':'Только тестовая сводка', 'qualifications':qualifications, 'passport':passport, 'coverage':coverage, 'limitations':limitations, 'changes':[],

@@ -3,13 +3,13 @@ import Ajv from 'ajv';
 import { CodexRunner } from './codex.mjs';
 import { LocalModelProvider, LocalProviderError } from './model-providers/local.mjs';
 import { analysisRequest, proposalRequest } from './model-request.mjs';
-import { validateResult, parseReview, proposalSchema } from './schema.mjs';
+import { validateResult, validateQualifications, parseReview, proposalSchema } from './schema.mjs';
 import { resultSources } from './sources.mjs';
 import { HttpError } from './security.mjs';
 import { now } from './db.mjs';
 
 const identityKeys = ['provider', 'profile', 'model', 'modelRevision', 'tokenizerRevision', 'chatTemplateSha256', 'contextWindow'];
-const activeStatus = status => ['queued', 'primary', 'review'].includes(status);
+const activeStatus = status => ['queued', 'qualification', 'primary', 'contract_risks', 'legal_modules', 'review'].includes(status);
 const proposalValid = new Ajv({ strict: true }).compile(proposalSchema);
 const cancelled = () => new LocalProviderError('cancelled', 499);
 const sanitized = error => error instanceof LocalProviderError || error instanceof HttpError ? error : new HttpError(503, 'Локальный ответ не получен или не прошёл проверку. Исходный результат сохранён, если был получен.');
@@ -25,6 +25,7 @@ export class LocalRunner extends CodexRunner {
     const description = provider.describe();
     if (description.provider !== 'local' || identityKeys.some(key => description[key] === undefined)) throw new HttpError(500, 'Не задана закреплённая конфигурация локального исполнителя.');
     const limits = {
+      qualification: config.maxOutputTokens?.qualification ?? 8192,
       primary: config.maxOutputTokens?.primary ?? 8192,
       review: config.maxOutputTokens?.review ?? 8192,
       proposal: config.maxOutputTokens?.proposal ?? 4096,
@@ -81,10 +82,10 @@ export class LocalRunner extends CodexRunner {
     finally { clearTimeout(timer); if (this.active === active) this.active = null; finish(); }
   }
   async execute(user, analysis, snapshot, stage, primary = null, context = {}) {
-    if (!['primary', 'review'].includes(stage)) throw new HttpError(409, 'Этот тип запроса не поддерживается локальным анализом.');
+    if (!['qualification', 'primary', 'review'].includes(stage)) throw new HttpError(409, 'Этот тип запроса не поддерживается локальным анализом.');
     this.#assertPin(snapshot?.inference);
     if (stage === 'review') this.#assertPin(primary?.execution?.inference);
-    const descriptor = analysisRequest(snapshot, stage, primary);
+    const descriptor = analysisRequest(snapshot, stage, primary, context.preliminaryQualifications);
     if (!descriptor.instructions || descriptor.data === undefined) throw new HttpError(500, 'Не сформирован полный запрос локального этапа.');
     const alive = context.alive || (() => activeStatus(this.db.prepare('SELECT status FROM analyses WHERE id=?').get(analysis)?.status));
     return this.#operation(user, analysis, stage, alive, async (signal, timeoutMs, assertActive) => {
@@ -93,6 +94,7 @@ export class LocalRunner extends CodexRunner {
         jsonSchema: descriptor.schema, model: this.#identity.model, maxOutputTokens: this.#limits[stage], timeoutMs, signal, temporary: Boolean(context.temporary) });
       assertActive();
       if (answer.modelRevision !== this.#identity.modelRevision) throw new LocalProviderError('model_mismatch');
+      if (stage === 'qualification') return validateQualifications(answer.json, snapshot);
       const result = resultSources(validateResult(stage === 'review' ? parseReview(descriptor.base, answer.json) : answer.json, snapshot, stage), snapshot, context.temporary ? null : analysis);
       const usage = answer.usage ? { input_tokens: answer.usage.inputTokens, output_tokens: answer.usage.outputTokens } : null;
       return { ...result, execution: { session: attemptId, attemptId, provider: 'local', model: this.#identity.model,
@@ -132,7 +134,7 @@ export class LocalRunner extends CodexRunner {
   }
   async logout() {
     this.#enabled = false; this.authEpoch++;
-    this.db.prepare("UPDATE analyses SET status='cancelled',error='Локальный исполнитель отключён',updated=? WHERE status IN ('queued','primary','review')").run(now());
+    this.db.prepare("UPDATE analyses SET status='cancelled',error='Локальный исполнитель отключён',updated=? WHERE status IN ('queued','qualification','primary','contract_risks','legal_modules','review')").run(now());
     const temporary = [...(this.temporary?.items?.values() || [])].filter(item => activeStatus(item.status));
     this.temporary?.cancelAll();
     for (const item of temporary) item.error = 'Локальный исполнитель отключён. Создайте новую проверку после подключения.';
