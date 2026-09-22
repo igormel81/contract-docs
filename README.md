@@ -1,6 +1,6 @@
 # Contract Docs — анализ договоров и управление рисками
 
-Веб-приложение для проверки договоров и приложений в PDF, DOC и DOCX: двухэтапный LLM-анализ с отдельным ревью, рекомендации по изменению условий, сравнение редакций и отслеживание договорных рисков со ссылками на исходные пункты. Текущая версия — пилот 0.3.5.
+Веб-приложение для проверки договоров и приложений в PDF, DOC и DOCX: двухэтапный LLM-анализ с отдельным ревью, рекомендации по изменению условий, сравнение редакций и отслеживание договорных рисков со ссылками на исходные пункты. Текущая версия — пилот 0.3.6.
 
 **Contract Docs** is a self-hosted contract review and risk management web application for Russian-language contracts. It supports PDF, DOC and DOCX, two-stage LLM analysis with a separate review, clause-level citations, amendment suggestions, document version comparison and risk mitigation tracking. Built with Node.js and SQLite, with a single runtime dependency (AJV). The analysis executor is chosen at startup through `DOCS_MODEL_PROVIDER`: `codex` (shared ChatGPT login, the mode running on the public pilot), `local` (an internal vLLM server — no subscription, no API key, outbound addresses restricted to private ranges), or a cloud vendor (`openai`, `deepseek`, `kimi`, `anthropic`). The local and cloud paths are covered by tests against synthetic servers; neither has been accepted against a real vLLM/GPU deployment. OCR and signed legal-package foundations remain tested modules not yet exposed in the application.
 

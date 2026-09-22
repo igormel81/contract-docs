@@ -1,6 +1,6 @@
 # Развёртывание «Договоры и риски» в организации
 
-Редакция руководства: 22 сентября 2026. Поставка исходников: 0.3.5. Аудитория: системный администратор и команда внедрения.
+Редакция руководства: 22 сентября 2026. Поставка исходников: 0.3.6. Аудитория: системный администратор и команда внедрения.
 
 ## 1. Что можно установить сейчас
 
@@ -20,11 +20,11 @@
 Скачайте архив, соседний файл SHA-256 и manifest.json со страницы «Локальная установка». На Linux в каталоге скачивания:
 
 ```sh
-sha256sum -c contract-docs-0.3.5.tar.gz.sha256
-tar -tzf contract-docs-0.3.5.tar.gz
+sha256sum -c contract-docs-0.3.6.tar.gz.sha256
+tar -tzf contract-docs-0.3.6.tar.gz
 ```
 
-Ожидается один верхний каталог `contract-docs-0.3.5/`. Файл `SOURCE-REVISION.txt` содержит commit исходников; `MANIFEST.sha256` — хеши каждого включённого файла. SHA-256 подтверждает целостность, но не является цифровой подписью издателя; сам архив получать по доверенному HTTPS-каналу.
+Ожидается один верхний каталог `contract-docs-0.3.6/`. Файл `SOURCE-REVISION.txt` содержит commit исходников; `MANIFEST.sha256` — хеши каждого включённого файла. SHA-256 подтверждает целостность, но не является цифровой подписью издателя; сам архив получать по доверенному HTTPS-каналу.
 
 | Каталог | Назначение |
 |---|---|
@@ -76,8 +76,8 @@ GPU не нужна для текущего варианта с внешним C
 Ниже — **первая установка на отдельном хосте**. Если служба, пользователь или каталог уже существуют, остановитесь и используйте процедуру обновления в разделе 8. Архив сначала проверьте из непривилегированного аккаунта.
 
 ```sh
-tar -xzf contract-docs-0.3.5.tar.gz
-cd contract-docs-0.3.5
+tar -xzf contract-docs-0.3.6.tar.gz
+cd contract-docs-0.3.6
 sha256sum -c MANIFEST.sha256
 npm ci --omit=dev --ignore-scripts
 npm run check
@@ -89,14 +89,14 @@ node deploy/onprem/preflight.mjs
 
 ```sh
 sudo useradd --system --home-dir /var/lib/contract-docs --shell /usr/sbin/nologin contract-docs
-sudo install -d -m 0755 /opt/contract-docs/releases/0.3.5
-sudo cp -a . /opt/contract-docs/releases/0.3.5/
-sudo install -d -m 0755 /opt/contract-docs/releases/0.3.5/public/downloads
-sudo install -m 0644 ../contract-docs-0.3.5.tar.gz ../contract-docs-0.3.5.tar.gz.sha256 ../manifest.json /opt/contract-docs/releases/0.3.5/public/downloads/
-sudo chown -R root:root /opt/contract-docs/releases/0.3.5
-sudo chmod -R a+rX /opt/contract-docs/releases/0.3.5
+sudo install -d -m 0755 /opt/contract-docs/releases/0.3.6
+sudo cp -a . /opt/contract-docs/releases/0.3.6/
+sudo install -d -m 0755 /opt/contract-docs/releases/0.3.6/public/downloads
+sudo install -m 0644 ../contract-docs-0.3.6.tar.gz ../contract-docs-0.3.6.tar.gz.sha256 ../manifest.json /opt/contract-docs/releases/0.3.6/public/downloads/
+sudo chown -R root:root /opt/contract-docs/releases/0.3.6
+sudo chmod -R a+rX /opt/contract-docs/releases/0.3.6
 sudo install -d -m 0700 -o contract-docs -g contract-docs /var/lib/contract-docs
-sudo ln -s /opt/contract-docs/releases/0.3.5 /opt/contract-docs/current
+sudo ln -s /opt/contract-docs/releases/0.3.6 /opt/contract-docs/current
 sudo -u contract-docs /usr/bin/node /opt/contract-docs/current/deploy/onprem/preflight.mjs
 sudo install -d -m 0700 /etc/contract-docs
 sudo install -m 0600 deploy/onprem/contract-docs.env.example /etc/contract-docs/contract-docs.env
@@ -126,7 +126,7 @@ curl --fail http://127.0.0.1:3107/docs/health
 sudo systemctl is-active contract-docs
 ```
 
-Ожидается health со `status=ok`, `version=0.3.5`, а также `provider` и `external` — вид исполнителя и признак передачи текста наружу. Health не проверяет подключение модели, извлечение, качество анализа или наличие свободного диска.
+Ожидается health со `status=ok`, `version=0.3.6`, а также `provider` и `external` — вид исполнителя и признак передачи текста наружу. Health не проверяет подключение модели, извлечение, качество анализа или наличие свободного диска.
 
 ## 5. HTTPS и первый пользователь
 

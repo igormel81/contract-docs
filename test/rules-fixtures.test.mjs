@@ -32,6 +32,7 @@ test('every rule in coverage has fixtures with a case that must not raise a find
       assert.ok(!item.text.includes('[параметр]'), `${name}: a contract fragment must not carry a proposal placeholder`);
       // Склеенный текст — «в течение в течение» — модель справедливо считает дефектом
       // условия, и отрицательный пример перестаёт проверять правило.
+      assert.doesNotMatch(item.text, /\b(\p{L}+)\s+\1\b/iu, `${name}: a fragment must not repeat a word`);
       assert.doesNotMatch(item.text, /\b(\p{L}+\s+\p{L}+)\s+\1\b/iu, `${name}: a fragment must not repeat a phrase`);
       assert.ok(typeof item.why === 'string' && item.why.trim().length >= 10, `${name}: every case explains itself`);
       // Соседнее правило вместо целевого — не промах, если это заранее допущено.
@@ -57,8 +58,8 @@ test('legal-v2 rule fixtures classify applicability before legal effect', async 
 });
 
 test('legally mapped rules advance their snapshot versions and LAW-01 covers every qualification branch', () => {
-  const expectedVersions = { 'LAW-01': 5, 'SCOPE-01': 3, 'TIME-01': 3, 'PAY-01': 4, 'ACCEPT-01': 3,
-    'LIAB-01': 3, 'IP-01': 4, 'PD-01': 4, 'DATA-01': 4, 'LIC-01': 3, 'LOC-01': 5 };
+  const expectedVersions = { 'LAW-01': 5, 'SCOPE-01': 3, 'TIME-01': 3, 'PAY-01': 4, 'ACCEPT-01': 4,
+    'LIAB-01': 3, 'IP-01': 5, 'PD-01': 4, 'DATA-01': 4, 'LIC-01': 3, 'LOC-01': 5 };
   for (const [id, version] of Object.entries(expectedVersions)) assert.equal(rules.find(rule => rule.id === id).version, version);
   assert.deepEqual(rules.filter(rule => !Object.hasOwn(expectedVersions, rule.id)).map(rule => [rule.id, rule.version]), [
     ['SLA-01',2]
