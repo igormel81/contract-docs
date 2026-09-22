@@ -10,6 +10,9 @@ import { format, extract, similarity } from './documents.mjs';
 import { rules, instructionVersion } from './rules.mjs';
 import { CodexRunner } from './codex.mjs';
 import { LocalRunner } from './local-runner.mjs';
+import { CloudRunner } from './cloud-runner.mjs';
+import { OpenAICompatibleProvider } from './model-providers/openai-compatible.mjs';
+import { AnthropicProvider } from './model-providers/anthropic.mjs';
 import { Organizations, validInn } from './organizations.mjs';
 import { QuickChecks } from './quick-checks.mjs';
 import { sourceRecord, resultSources } from './sources.mjs';
@@ -21,6 +24,9 @@ import { createProgressiveAnalysis, toPublicProgress } from './progressive-analy
 import { servePublication } from './publication.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// Single source of the published version: a hand-copied literal here had
+// already drifted from package.json once.
+const VERSION = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const parse = value => value ? JSON.parse(value) : null;
 function legalPackageConfiguration(options, dir) {
   if (options.legalPackageStore) return { store: options.legalPackageStore,
@@ -38,12 +44,37 @@ function legalPackageConfiguration(options, dir) {
   return { store, managers: new Set(reviewers) };
 }
 // One provider per running instance, fixed at startup: Codex remains the
-// default; a local inference server is an explicit administrator choice.
-// Switching modes on a live instance is not supported (plans/features/(sep-26)-local-installation.md, LOC-03).
-function modelProviderConfiguration(options) {
+// default; a local inference server or a cloud vendor is an explicit
+// administrator choice. Switching modes on a live instance is not supported
+// (plans/features/(sep-26)-local-installation.md, LOC-03).
+const CLOUD_VENDORS = ['openai', 'deepseek', 'kimi', 'anthropic'];
+const CLOUD_DEFAULT_BASE_URL = { openai: 'https://api.openai.com/v1', kimi: 'https://api.moonshot.ai/v1', deepseek: 'https://api.deepseek.com', anthropic: 'https://api.anthropic.com' };
+// OpenAI and Kimi accept strict, schema-conformant decoding; DeepSeek only
+// offers loose JSON mode (see server/model-providers/openai-compatible.mjs) —
+// this app's own AJV validation (server/schema.mjs) is the actual enforcement
+// point regardless, so the loose mode is not a weaker guarantee, just a
+// noisier one.
+const CLOUD_STRUCTURED_MODE = { openai: 'json_schema', kimi: 'json_schema', deepseek: 'json_object' };
+export function modelProviderConfiguration(options) {
   const kind = String(options.modelProvider ?? process.env.DOCS_MODEL_PROVIDER ?? 'codex').trim().toLowerCase();
   if (kind === 'codex') return { kind };
-  if (kind !== 'local') throw new Error('DOCS_MODEL_PROVIDER должен быть "codex" или "local".');
+  if (kind === 'local') return localProviderConfiguration(options);
+  if (!CLOUD_VENDORS.includes(kind)) throw new Error(`DOCS_MODEL_PROVIDER должен быть "codex", "local" или одним из облачных: ${CLOUD_VENDORS.join(', ')}.`);
+  const cloud = options.cloud || {};
+  const runnerOptions = { maxOutputTokens: cloud.maxOutputTokens, timeoutMs: cloud.timeoutMs };
+  if (cloud.provider) return { kind, provider: cloud.provider, runnerOptions };
+  const required = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new Error(`Облачный исполнитель (${kind}): не задан ${name}.`); return value; };
+  const apiKey = required(cloud.apiKey ?? process.env.DOCS_CLOUD_API_KEY, 'DOCS_CLOUD_API_KEY');
+  const model = required(cloud.model ?? process.env.DOCS_CLOUD_MODEL, 'DOCS_CLOUD_MODEL');
+  const contextWindow = Number(cloud.contextWindow ?? process.env.DOCS_CLOUD_CONTEXT_WINDOW);
+  const baseUrl = cloud.baseUrl ?? process.env.DOCS_CLOUD_BASE_URL ?? CLOUD_DEFAULT_BASE_URL[kind];
+  const provider = kind === 'anthropic'
+    ? new AnthropicProvider({ apiKey, model, contextWindow, endpoint: baseUrl, apiVersion: cloud.apiVersion ?? process.env.DOCS_CLOUD_API_VERSION ?? undefined })
+    : new OpenAICompatibleProvider({ vendor: kind, apiKey, model, contextWindow, baseUrl, structuredOutputMode: CLOUD_STRUCTURED_MODE[kind] });
+  return { kind, provider, runnerOptions };
+}
+function localProviderConfiguration(options) {
+  const kind = 'local';
   const local = options.local || {};
   if (local.provider) return { kind, config: { maxOutputTokens: local.maxOutputTokens, timeoutMs: local.timeoutMs }, runnerOptions: { provider: local.provider } };
   const required = (value, name) => { if (typeof value !== 'string' || !value.trim()) throw new Error(`Локальный исполнитель: не задан ${name}.`); return value; };
@@ -95,8 +126,17 @@ export async function createApp(options = {}) {
   const modelProvider = modelProviderConfiguration(options);
   const runner = modelProvider.kind === 'local'
     ? new LocalRunner(db, dir, modelProvider.config, modelProvider.runnerOptions)
+    : CLOUD_VENDORS.includes(modelProvider.kind)
+    ? new CloudRunner(db, dir, modelProvider.provider, modelProvider.runnerOptions)
     : new CodexRunner(db, dir, options.codex || process.env.DOCS_CODEX || '/usr/bin/codex');
   const inferencePin = () => runner.describe ? runner.describe() : null;
+  // The interface and every refusal message read the active executor from here
+  // instead of assuming Codex (plans/features/(sep-26)-local-installation.md, LOC-03).
+  const capabilities = () => runner.capabilities();
+  const connectionStatus = async user => ({ ...await runner.status(canManageCodex(user)), capabilities: capabilities() });
+  function requireCodexExecutor() {
+    if (capabilities().provider !== 'codex') throw new HttpError(409, 'Вход Codex не используется: исполнитель анализа задан администратором установки при запуске.');
+  }
   const runtime = options.runtime || process.env.DOCS_RUNTIME || await mkdtemp(join(tmpdir(),'contract-docs-runtime-'));
   const organizations = new Organizations(db), lookups = new Map();
   await runner.initLookup(runtime);
@@ -156,7 +196,14 @@ export async function createApp(options = {}) {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = new URL(req.url, origin), path = url.pathname;
     if (req.method === 'GET' && path === '/docs') { res.writeHead(308, { Location: '/docs/' }); return res.end(); }
-    if (req.method === 'GET' && path === '/docs/health') return send(res, 200, { status: 'ok', version: '0.3.3' });
+    // Public descriptor: the login page must be able to state where document
+    // text is processed before anyone signs in. It carries no credentials,
+    // endpoint or model revision — only the executor kind and whether analysis
+    // leaves the installation perimeter.
+    if (req.method === 'GET' && path === '/docs/health') {
+      const caps = runner.capabilities();
+      return send(res, 200, { status: 'ok', version: VERSION, provider: caps.provider, external: caps.external });
+    }
     if (await servePublication(req,res,path,root)) return;
     const publicFiles = { '/docs/logo.svg':['logo.svg','image/svg+xml'], '/docs/organizations.js':['organizations.js','text/javascript'], '/docs/': ['index.html','text/html'], '/docs/app.js': ['app.js','text/javascript'], '/docs/quick.js': ['quick.js','text/javascript'], '/docs/document-ui.js': ['document-ui.js','text/javascript'], '/docs/summary.js': ['summary.js','text/javascript'], '/docs/app.css': ['app.css','text/css'] };
     if (req.method === 'GET' && publicFiles[path]) {
@@ -202,7 +249,7 @@ export async function createApp(options = {}) {
       customers: db.prepare('SELECT * FROM customers WHERE user_id=? ORDER BY name').all(user.id),
       contracts: db.prepare('SELECT c.*, (SELECT COUNT(*) FROM revisions r WHERE r.contract_id=c.id) revision_count FROM contracts c WHERE user_id=? ORDER BY created DESC').all(user.id),
       profiles: organizations.profiles(user.id), organizations: organizations.list(user.id), rules: withLegalContext({rules},new Date(),activeLegalCorpus()).rules,
-      legal: currentLegalCatalog(), legalPackages: { configured: Boolean(legalStore), canManage: canManageLegal(user) }, codex: await runner.status(canManageCodex(user))
+      legal: currentLegalCatalog(), legalPackages: { configured: Boolean(legalStore), canManage: canManageLegal(user) }, codex: await connectionStatus(user)
     });
     if (path === '/docs/api/legal-base' && req.method === 'GET') return send(res,200,currentLegalCatalog());
     if (path === '/docs/api/legal-packages') {
@@ -240,8 +287,13 @@ export async function createApp(options = {}) {
     if(path==='/docs/api/organizations/lookup'&&req.method==='POST'){
       const input=await jsonBody(req),inn=String(input.inn||'').trim();
       if(!validInn(inn))throw new HttpError(400,'Проверьте ИНН: нужны 10 или 12 цифр с корректными контрольными разрядами.');
-      if(runner.busy||runner.active)throw new HttpError(409,'Сейчас выполняется запрос Codex. Дождитесь завершения или заполните карточку вручную.');
-      if(!(await runner.status()).connected)throw new HttpError(409,'Общий Codex не подключён. Заполните вручную или обратитесь к владельцу приложения.');
+      // Refused before the job and before the hourly quota: a runner without an
+      // internet search used to accept the request, spend one of the six
+      // attempts and only then fail asynchronously.
+      const caps=capabilities();
+      if(!caps.organizationLookup)throw new HttpError(409,`Интернет-поиск организации доступен только с исполнителем Codex; активен другой (${caps.label}). Заполните карточку вручную.`);
+      if(runner.busy||runner.active)throw new HttpError(409,`Сейчас выполняется запрос исполнителя (${caps.label}). Дождитесь завершения или заполните карточку вручную.`);
+      if(!(await runner.status()).connected)throw new HttpError(409,`${caps.offline} Заполните карточку вручную. ${caps.recovery}`);
       limit(db,`organization-lookup:${user.id}`,6,3600000);
       const job={id:id(),user:user.id,inn,status:'running',expires:Date.now()+15*60000};lookups.set(job.id,job);
       runner.organizationLookup(user.id,job.id,inn,()=>job.status==='running'&&job.expires>Date.now()).then(result=>{if(job.status==='running'){job.status='complete';job.result=result;}}).catch(e=>{if(job.status==='running'){job.status='error';job.error=e.message;}});
@@ -270,13 +322,13 @@ export async function createApp(options = {}) {
         const org=organizations.save(user.id,input,orgMatch[1],job?.result);audit(db,user.id,null,'Обновлена организация',org.id);return send(res,200,org);
       }
     }
-    if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await runner.status(canManageCodex(user)));
+    if (path === '/docs/api/codex' && req.method === 'GET') return send(res,200,await connectionStatus(user));
     if (path === '/docs/api/codex/login' && req.method === 'POST') {
-      requireCodexAdmin(user); limit(db,'codex-login:application',5,3600000);
+      requireCodexExecutor(); requireCodexAdmin(user); limit(db,'codex-login:application',5,3600000);
       const connection = await runner.login(); audit(db,user.id,null,'Начат общий вход Codex'); return send(res,200,connection);
     }
     if (path === '/docs/api/codex/logout' && req.method === 'POST') {
-      requireCodexAdmin(user); const input=await jsonBody(req);
+      requireCodexExecutor(); requireCodexAdmin(user); const input=await jsonBody(req);
       if (input.confirm !== 'disconnect-application') throw new HttpError(400,'Подтвердите отключение Codex для всего приложения.');
       await runner.logout(); audit(db,user.id,null,'Общее подключение Codex отключено'); return send(res,200,{ok:true});
     }
@@ -391,7 +443,7 @@ export async function createApp(options = {}) {
       }
       if (action === 'analyses' && req.method === 'POST') {
         const input=await jsonBody(req); const rev=revision(required(input.revision_id),contract.id);
-        if (!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Владелец приложения должен выполнить вход в настройках.');
+        if (!(await runner.status()).connected) { const caps=capabilities(); throw new HttpError(409,`${caps.offline} ${caps.recovery}`); }
         if (db.prepare("SELECT id FROM analyses WHERE revision_id=? AND status IN ('queued','qualification','primary','contract_risks','legal_modules','review')").get(rev.id)) throw new HttpError(409,'Этот комплект уже в очереди или анализируется.');
         limit(db,`analyses:${user.id}`,10,3600000);
         const files = parse(rev.file_ids).map(key=>owned('files',key,user.id));
@@ -484,7 +536,7 @@ export async function createApp(options = {}) {
       }
       if(req.method==='POST'&&action==='retry'){
         if(!['error','interrupted'].includes(analysis.status)) throw new HttpError(409,'Эта попытка не требует повторения.');
-        if(!(await runner.status()).connected) throw new HttpError(409,'Общий Codex не подключён. Обратитесь к владельцу приложения.');
+        if(!(await runner.status()).connected) { const caps=capabilities(); throw new HttpError(409,`${caps.offline} ${caps.recovery}`); }
         const key=id(), created=now();
         db.prepare('INSERT INTO analyses(id,user_id,contract_id,revision_id,status,snapshot,primary_result,progress,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,user.id,analysis.contract_id,analysis.revision_id,'queued',analysis.snapshot,analysis.primary_result,JSON.stringify(createProgressiveAnalysis({analysisId:key,at:created})),created,created);
         audit(db,user.id,analysis.contract_id,'Повтор анализа с сохранением прежней попытки',analysis.id); return send(res,202,{id:key});

@@ -76,6 +76,11 @@ test('account isolation, uploads, immutable revisions, risks, CSRF and session r
   assert.equal((await request('/codex',undefined,a.cookie)).data.connected,false,'Legacy personal login must not become shared');
   const authdir=app.runner.home();await mkdir(authdir,{recursive:true});await writeFile(join(authdir,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{access_token:'fake-test-only'}}));
   assert.equal((await request('/codex',undefined,a.cookie)).data.canManage,true);
+  const capabilities=(await request('/codex',undefined,a.cookie)).data.capabilities;
+  assert.equal(capabilities.provider,'codex');
+  assert.equal(capabilities.organizationLookup,true,'only the Codex executor offers the INN lookup');
+  const health=await(await fetch(base.replace('/api','/health'))).json();
+  assert.deepEqual({provider:health.provider,external:health.external},{provider:'codex',external:true});
   assert.equal((await request('/codex',undefined,b.cookie)).data.connected,true);
   assert.equal((await request('/codex',undefined,b.cookie)).data.canManage,false);
   assert.equal((await request('/codex/login',{},b.cookie)).status,403);

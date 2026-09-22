@@ -35,6 +35,13 @@ test('public introduction explains audience, benefits and current AI limitations
   assert.match(login,/отдельным ревью/);
   assert.match(login,/Разовая проверка без добавления в хранилище/);
   assert.match(login,/не заменяет юридическую экспертизу/);
-  assert.match(login,/текст передаётся в Codex/);
+  // Where the text is processed depends on the executor this installation runs,
+  // so the promo reads it from the public /docs/health descriptor instead of
+  // asserting Codex unconditionally.
+  assert.match(login,/\$\{esc\(serviceDisclosure\(\)\)\}/);
+  const disclosure=app.slice(app.indexOf('function serviceDisclosure()'),app.indexOf('function serviceDisclosure()')+700);
+  assert.match(disclosure,/текст передаётся в Codex/);
+  assert.match(disclosure,/не передаётся наружу/);
+  assert.match(disclosure,/облачному провайдеру/);
   assert.ok(login.indexOf('promo-title')<login.indexOf('data-form="auth"'));
 });

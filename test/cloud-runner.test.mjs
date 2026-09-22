@@ -7,11 +7,12 @@ import { createApp } from '../server/main.mjs';
 import { rules } from '../server/rules.mjs';
 import { createProgressiveAnalysis } from '../server/progressive-analysis.mjs';
 
-// In-memory double for LocalModelProvider: exercises the LocalRunner queue/stage
-// glue (server/local-runner.mjs) without a real vLLM server. The HTTP transport
-// itself is covered separately in test/local-provider.test.mjs.
-const identity = { provider: 'local', profile: 'vllm-chat', model: 'test-model', modelRevision: 'rev-1',
-  tokenizerRevision: 'tok-1', chatTemplateSha256: 'a'.repeat(64), contextWindow: 32000 };
+// In-memory double for a cloud provider (OpenAICompatibleProvider/AnthropicProvider
+// shape): exercises the CloudRunner queue/stage glue (server/cloud-runner.mjs)
+// without any network call. Each concrete provider's own HTTP behaviour is
+// covered in test/openai-compatible-provider.test.mjs, test/anthropic-provider.test.mjs
+// and the main.mjs wiring seam in test/cloud-provider-wiring.test.mjs.
+const identity = { provider: 'openai', model: 'test-model' };
 
 function fakeProvider(capture) {
   return {
@@ -19,6 +20,10 @@ function fakeProvider(capture) {
     async health() { return { ready: true, ...this.describe(), generationProbed: true }; },
     async generate({ stage, data }) {
       capture?.push({ stage, data });
+      if (stage === 'proposal') {
+        return { json: { proposal: 'Стороны согласовывают перечень площадок и оплату выездов.', note: 'Тестовая формулировка.' },
+          finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1, model: identity.model, revisionsAttested: false, inputTokens: 1 };
+      }
       const fields = ['subject','result','term','price','payment','location','acceptance','dependencies','special'];
       const document = data.documents[0], block = document.blocks[0];
       const passport = fields.map(key => ({ key, title: key, value: 'Не найдено', status: 'missing', sources: [] }));
@@ -41,17 +46,16 @@ function fakeProvider(capture) {
             legalSources: [], legalType: 'not_applicable', proposal: 'Уточнить порядок согласования места выполнения работ.', review: 'primary' }] };
       }
       return { json, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1,
-        modelRevision: identity.modelRevision, tokenizerRevision: identity.tokenizerRevision,
-        chatTemplateSha256: identity.chatTemplateSha256, inputTokens: 1, revisionsAttested: false };
+        model: identity.model, revisionsAttested: false, inputTokens: 1 };
     }
   };
 }
 
 async function fixture(t) {
-  const dir = await mkdtemp(join(tmpdir(), 'docs-local-runner-'));
+  const dir = await mkdtemp(join(tmpdir(), 'docs-cloud-runner-'));
   const capture = [];
   const options = { dir, origin: 'http://127.0.0.1:3107', sandbox: false, autoTick: false, codexAdmin: 'owner',
-    modelProvider: 'local', local: { provider: fakeProvider(capture) } };
+    modelProvider: 'openai', cloud: { provider: fakeProvider(capture) } };
   const app = await createApp(options);
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(async () => {
@@ -74,57 +78,78 @@ function seedAnalysis(app, id, userId, snapshot, status = 'queued') {
   return stamp;
 }
 
-test('createApp wires LocalRunner when modelProvider is "local"', async t => {
+test('createApp wires CloudRunner when modelProvider is a cloud vendor', async t => {
   const { app } = await fixture(t);
-  assert.equal(app.runner.constructor.name, 'LocalRunner');
+  assert.equal(app.runner.constructor.name, 'CloudRunner');
   assert.deepEqual(app.runner.describe(), identity);
   assert.equal((await app.runner.status()).connected, true);
+  assert.equal((await app.runner.status()).provider, 'openai');
 });
 
 test('execute() qualification stage returns only qualifications, with no execution wrapper', async t => {
   const { app, userId, snapshot } = await fixture(t);
   seedAnalysis(app, 'a-qual', userId, snapshot);
   const result = await app.runner.execute(userId, 'a-qual', snapshot, 'qualification');
-  assert.ok(Array.isArray(result.qualifications), 'result has qualifications');
-  assert.ok(result.qualifications.length > 0, 'qualifications not empty');
-  assert.equal(result.qualifications[0].type, 'works');
-  assert.equal(result.execution, undefined, 'qualification stage carries no execution metadata (matches CodexRunner behaviour)');
-  assert.equal(result.findings, undefined, 'qualification stage has no findings');
+  assert.ok(Array.isArray(result.qualifications));
+  assert.ok(result.qualifications.length > 0);
+  assert.equal(result.execution, undefined);
+  assert.equal(result.findings, undefined);
 });
 
-test('execute() primary stage forwards preliminaryQualifications from context into the prompt data', async t => {
-  const { app, userId, snapshot, capture } = await fixture(t);
-  seedAnalysis(app, 'a-primary', userId, snapshot);
-  const preliminary = [{ type: 'works', sources: [], confidence: 'high', note: 'Предварительная квалификация.', legalModules: [] }];
-  const result = await app.runner.execute(userId, 'a-primary', snapshot, 'primary', null, { preliminaryQualifications: preliminary });
-  assert.ok(result.findings.length > 0, 'primary stage returns findings');
-  assert.ok(result.execution, 'primary stage has execution metadata');
-  assert.equal(result.execution.inference.model, identity.model);
-  const primaryCall = capture.find(c => c.stage === 'primary');
-  assert.ok(primaryCall, 'provider.generate was called for the primary stage');
-  assert.deepEqual(primaryCall.data.preliminaryQualifications, preliminary, 'preliminary qualifications reached the request data (previously silently dropped)');
+test('execute() rejects a pin mismatch (different model than the running instance)', async t => {
+  const { app, userId, snapshot } = await fixture(t);
+  const staleSnapshot = { ...snapshot, inference: { provider: 'openai', model: 'a-different-model' } };
+  seedAnalysis(app, 'a-stale', userId, staleSnapshot);
+  await assert.rejects(
+    app.runner.execute(userId, 'a-stale', staleSnapshot, 'qualification'),
+    err => err.status === 409);
 });
 
-test('tick() drives a queued legal-v2 analysis through qualification, contract_risks, legal_modules and review to completion', async t => {
+test('execute() rejects an unsupported stage (organization lookup is not available in cloud mode)', async t => {
+  const { app, userId, snapshot } = await fixture(t);
+  seedAnalysis(app, 'a-org', userId, snapshot);
+  await assert.rejects(app.runner.organizationLookup(userId, 'a-org', '7707083893', () => true), err => err.status === 409);
+});
+
+test('tick() drives a queued legal-v2 analysis through the full progressive cycle to completion', async t => {
   const { app, userId, snapshot } = await fixture(t);
   seedAnalysis(app, 'a-tick', userId, snapshot);
 
   await app.runner.tick();
 
   const row = app.db.prepare('SELECT status, primary_result, review_result, error, progress FROM analyses WHERE id=?').get('a-tick');
-  assert.equal(row.error, null, 'no error after a full progressive cycle');
+  assert.equal(row.error, null);
   assert.equal(row.status, 'complete');
   const primary = JSON.parse(row.primary_result);
-  assert.ok(primary.findings.length > 0, 'primary_result has findings');
-  assert.ok(primary.qualifications.length > 0, 'primary_result has qualifications');
+  assert.ok(primary.findings.length > 0);
+  assert.ok(primary.qualifications.length > 0);
   const review = JSON.parse(row.review_result);
-  assert.ok(review.findings.length > 0, 'review_result has findings');
+  assert.ok(review.findings.length > 0);
   assert.equal(review.findings[0].review, 'confirmed');
   const progress = JSON.parse(row.progress);
   assert.equal(progress.status, 'complete');
   for (const phase of ['qualification', 'contract_risks', 'legal_modules', 'review']) {
     assert.equal(progress.phases[phase].status, 'completed', `${phase} phase recorded as completed`);
   }
+});
+
+test('proposal() returns text and usage, and is refused while busy', async t => {
+  const { app } = await fixture(t);
+  const result = await app.runner.proposal({
+    inference: app.runner.describe(),
+    profile: { name: 'Test' }, rule: { id: 'LOC-01', title: 'Места работ' },
+    finding: { rule: 'LOC-01', title: 'Test', description: 'Test', severity: 'medium', legalSources: [] },
+    legal: null, clauses: [{ document: 'test.pdf', clause: '1.1', text: 'Место выполнения работ.' }],
+  });
+  assert.ok(typeof result.proposal === 'string' && result.proposal.length > 0, 'proposal text returned');
+  assert.deepEqual(result.usage, { input_tokens: 1, output_tokens: 1 });
+  assert.equal(result.execution.provider, 'openai');
+});
+
+test('login() is refused; cloud mode does not use Codex device-auth', async t => {
+  const { app } = await fixture(t);
+  await assert.rejects(app.runner.login(), err => err.status === 409);
+  assert.throws(() => app.runner.home(), err => err.status === 409);
 });
 
 test('logout() cancels an analysis sitting in the qualification phase', async t => {
@@ -134,42 +159,6 @@ test('logout() cancels an analysis sitting in the qualification phase', async t 
   await app.runner.logout();
 
   const row = app.db.prepare('SELECT status, error FROM analyses WHERE id=?').get('a-stuck');
-  assert.equal(row.status, 'cancelled', 'analysis in the qualification phase is cancelled on logout (previously missed by the status filter)');
-  assert.ok(row.error, 'error message populated');
-});
-
-// Executor-facing HTTP surface. A local installation must not be told to
-// "connect Codex", and must not be able to spend one of its six hourly lookup
-// attempts on a search this runner cannot perform.
-async function http(app, path, { data, cookie = '', method } = {}) {
-  const base = `http://127.0.0.1:${app.server.address().port}`;
-  const res = await fetch(base + path, { method: method || (data === undefined ? 'GET' : 'POST'),
-    headers: { Origin: 'http://127.0.0.1:3107', 'X-Docs-Request': '1', 'Content-Type': 'application/json', Cookie: cookie },
-    body: data === undefined ? undefined : JSON.stringify(data) });
-  return { status: res.status, data: await res.json(), cookie: res.headers.get('set-cookie')?.split(';')[0] };
-}
-
-test('local mode: health, status and refusals describe the local executor instead of Codex', async t => {
-  const { app } = await fixture(t);
-  const health = await http(app, '/docs/health');
-  assert.equal(health.data.provider, 'local');
-  assert.equal(health.data.external, false, 'a local executor keeps document text inside the perimeter');
-
-  const account = await http(app, '/docs/api/register', { data: { login: 'installer', password: 'Passw0rd!2026' } });
-  assert.equal(account.status, 200);
-  const status = await http(app, '/docs/api/codex', { cookie: account.cookie });
-  assert.equal(status.data.capabilities.provider, 'local');
-  assert.equal(status.data.capabilities.organizationLookup, false);
-  assert.doesNotMatch(status.data.capabilities.offline, /Codex/);
-
-  const before = app.db.prepare("SELECT COUNT(*) n FROM throttle WHERE key LIKE 'organization-lookup:%'").get().n;
-  const lookup = await http(app, '/docs/api/organizations/lookup', { data: { inn: '7707083893' }, cookie: account.cookie });
-  assert.equal(lookup.status, 409, 'refused up front, not accepted and failed asynchronously');
-  assert.match(lookup.data.error, /Заполните карточку вручную/);
-  const after = app.db.prepare("SELECT COUNT(*) n FROM throttle WHERE key LIKE 'organization-lookup:%'").get().n;
-  assert.equal(after, before, 'a refused lookup does not consume the hourly quota');
-
-  const login = await http(app, '/docs/api/codex/login', { data: {}, cookie: account.cookie });
-  assert.equal(login.status, 409);
-  assert.match(login.data.error, /администратором установки/);
+  assert.equal(row.status, 'cancelled');
+  assert.ok(row.error);
 });

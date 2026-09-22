@@ -32,6 +32,14 @@ export class CodexRunner {
     for(const entry of await readdir(this.lookupRoot,{withFileTypes:true}))if(entry.isDirectory()&&/^lookup-[a-f0-9-]{36}$/.test(entry.name))await rm(join(this.lookupRoot,entry.name),{recursive:true,force:true});
   }
   env() { return { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', CODEX_HOME: this.home() }; }
+  // Executor description for HTTP answers and interface texts. Every non-Codex
+  // runner overrides it: an installation must never be told to "connect Codex"
+  // when Codex is not its executor, and must not be offered an internet lookup
+  // the active runner cannot perform.
+  capabilities() {
+    return { provider: 'codex', label: 'Общий Codex', organizationLookup: true, external: true,
+      offline: 'Общий Codex не подключён.', recovery: 'Обратитесь к владельцу приложения.' };
+  }
   async status(canManage = false) {
     const epoch = this.authEpoch;
     let connected = false;
