@@ -56,11 +56,12 @@ test('legal-v2 rule fixtures classify applicability before legal effect', async 
   assert.ok(commercial.every(item => item.expect === 'finding' && item.legalType === 'not_applicable'), 'commercial risks are not labelled as legal violations');
 });
 
-test('only legal-v2 rules advance their snapshot versions and LAW-01 covers every qualification branch', () => {
-  const expectedVersions = { 'LAW-01': 4, 'PD-01': 3, 'IP-01': 3, 'LIC-01': 3, 'LOC-01': 5 };
+test('legally mapped rules advance their snapshot versions and LAW-01 covers every qualification branch', () => {
+  const expectedVersions = { 'LAW-01': 5, 'SCOPE-01': 3, 'TIME-01': 3, 'PAY-01': 4, 'ACCEPT-01': 3,
+    'LIAB-01': 3, 'IP-01': 4, 'PD-01': 4, 'DATA-01': 4, 'LIC-01': 3, 'LOC-01': 5 };
   for (const [id, version] of Object.entries(expectedVersions)) assert.equal(rules.find(rule => rule.id === id).version, version);
   assert.deepEqual(rules.filter(rule => !Object.hasOwn(expectedVersions, rule.id)).map(rule => [rule.id, rule.version]), [
-    ['SCOPE-01',2], ['TIME-01',2], ['PAY-01',3], ['ACCEPT-01',2], ['LIAB-01',2], ['SLA-01',2], ['DATA-01',3]
+    ['SLA-01',2]
   ]);
   const law = rules.find(rule => rule.id === 'LAW-01').instruction;
   for (const type of qualificationTypes) assert.ok(law.includes(type), `LAW-01 has an applicability branch for ${type}`);

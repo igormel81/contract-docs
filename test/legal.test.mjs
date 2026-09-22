@@ -5,7 +5,7 @@ import { readLegalCorpus, legalCatalog, withLegalContext, legalStatus, validateL
 import { schema, reviewSchema, qualificationSchema, validateResult, validateQualifications, parseReview } from '../server/schema.mjs';
 import { rules } from '../server/rules.mjs';
 
-const now = new Date('2026-09-05T12:00:00Z');
+const now = new Date('2026-09-22T12:00:00Z');
 const snapshot = () => withLegalContext({ rules, documents: [{ id: 'doc', blocks: [{ id: 'clause', text: '3.1. Работы выполняются до 1 декабря 2026 года.' }] }] }, now);
 const source = () => ({ fileId: 'doc', blockId: 'clause', quote: 'Работы выполняются до 1 декабря 2026 года.' });
 const result = () => ({ summary: 'Тест', qualifications: [{ type: 'works', sources: [source()], confidence: 'high', note: 'В документе прямо названы работы.', legalModules: ['civil-works'] }], passport: ['subject','result','term','price','payment','location','acceptance','dependencies','special'].map(key => ({ key, title: key, value: 'Нет данных', status: 'missing', sources: [] })), findings: [],
@@ -14,18 +14,36 @@ const finding = () => ({ id: 'law', rule: 'LAW-01', title: 'Проверить �
   description: 'Требуется правовая проверка применимости и редакции нормы.', sources: [source()], legalType: 'facts_or_documents_required',
   legalSources: [{ normId: 'RU-GK2-708-1', quote: 'В договоре подряда указываются начальный и конечный сроки выполнения работы.' }], proposal: '', review: 'primary' });
 
-test('release-pinned corpus is reference-only with six identified paragraphs and honest provenance', () => {
+test('release-pinned corpus is reference-only with identified paragraphs, modules and honest provenance', () => {
   const legal = legalCatalog(now);
   assert.equal(legal.status, 'reference_only'); assert.equal(legal.currentAsOf, null);
-  assert.equal(legal.norms.length, 6);
+  assert.equal(legal.norms.length, 29);
+  assert.deepEqual(legal.modules.map(module => module.id), [
+    'civil-general', 'civil-works', 'civil-services', 'software-rights', 'personal-data', 'commercial-secrets'
+  ]);
   for (const norm of legal.norms) {
-    assert.match(norm.id, /^RU-GK2-\d+-\d$/); assert.equal(norm.textSha256.length, 64);
+    assert.match(norm.id, /^RU-(?:GK[124]|152FZ|98FZ)-\d+-\d$/); assert.equal(norm.textSha256.length, 64);
     assert.equal(norm.provenance.currentEditionVerified, false);
     assert.equal(norm.effectiveFrom, null); assert.equal(norm.verificationStatus, 'reference_only');
-    assert.match(norm.sourceUrl, /^https:\/\/government\.ru\//);
+    assert.equal(typeof norm.moduleId, 'string');
+    assert.match(norm.sourceUrl, /^https:\/\/(?:pravo\.gov\.ru|www\.kremlin\.ru)\//);
   }
   assert.equal(readLegalCorpus(undefined, 'wrong-hash').status, 'unavailable');
   assert.equal(readLegalCorpus('/not/a/corpus').status, 'unavailable');
+});
+
+test('the expanded modules are selected only for compatible obligation qualifications', () => {
+  const captured = snapshot();
+  const output = { qualifications: [{
+    type: 'services',
+    sources: [source()],
+    confidence: 'high',
+    note: 'Исполнитель совершает действия и обрабатывает переданные данные.',
+    legalModules: ['civil-general', 'civil-services', 'personal-data', 'commercial-secrets']
+  }] };
+  assert.equal(validateQualifications(output, captured), output);
+  output.qualifications[0].type = 'works';
+  assert.throws(() => validateQualifications(output, captured), /не применим/, 'personal-data is not inferred for every works contract');
 });
 
 test('snapshot pins the corpus and does not replace it on retry or claim legal completeness', () => {
@@ -37,7 +55,7 @@ test('snapshot pins the corpus and does not replace it on retry or claim legal c
   assert.equal(legalStatus(captured.legal, afterReviewDue), 'stale');
   const output = result(); output.findings = [finding()];
   assert.doesNotThrow(() => validateLegalResult(output, captured, now));
-  assert.ok(output.limitations.some(s => s.includes('шестью пунктами')));
+  assert.ok(output.limitations.some(s => s.includes('отдельные нормы')));
   output.coverage.find(c => c.rule === 'LAW-01').status = 'checked';
   assert.throws(() => validateLegalResult(output, captured, now), /нужны данные/);
 });
@@ -47,7 +65,7 @@ test('legal references must match exact immutable paragraph and contract citatio
   const enriched = enrichLegalSources(output, captured).findings[0];
   assert.equal(enriched.legalSources[0].article, '708');
   assert.equal(enriched.legalSources[0].paragraph, '1');
-  assert.equal(enriched.legalSources[0].sourceUrl, captured.legal.norms[0].sourceUrl);
+  assert.equal(enriched.legalSources[0].sourceUrl, captured.legal.norms.find(n => n.id === 'RU-GK2-708-1').sourceUrl);
   assert.deepEqual(enriched.sources, output.findings[0].sources);
   output.findings[0].legalSources[0].quote = 'Подрядчик всегда обязан работать бесплатно.';
   assert.throws(() => validateLegalResult(output, captured, now), /цитата/);
@@ -82,7 +100,7 @@ test('stale or unavailable normative evidence is rejected for PAY-01 as well as 
 
 test('verified status requires issuer verification and real effective dates for every norm', () => {
   const legal = snapshot().legal;
-  legal.status = 'verified'; legal.currentAsOf = '2026-09-05';
+  legal.status = 'verified'; legal.currentAsOf = '2026-09-22';
   for (const norm of legal.norms) { norm.verificationStatus = 'verified'; norm.effectiveFrom = '2026-01-01'; }
   assert.equal(legalStatus(legal, now), 'reference_only', 'A status label alone cannot confirm the edition');
   legal.provenance.currentEditionVerified = true;
