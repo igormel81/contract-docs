@@ -3,7 +3,7 @@
 Status: in progress
 Owner: Codex coordinator
 Surface: правила, нормативные пакеты, анализ, API, интерфейс, тесты
-Updated: 2026-09-22. Baseline release: `ce9d360` / 0.3.5; expanded reference-only legal corpus is deployed.
+Updated: 2026-09-22. Baseline release: `fcbef74` / 0.3.6 candidate; expanded reference-only legal corpus is deployed in 0.3.5.
 
 ## Outcome
 
