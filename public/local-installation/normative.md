@@ -95,7 +95,7 @@ HTTP-авторизация, включение корпуса в оба вид�
 
 Related:
 
-- [Обзор сервиса](../README.md)
-- [Нормативный модуль](../server/legal.mjs)
-- [Пакет источников](../server/legal-data/civil-works-2026-09-05.json)
-- [Проверки правовых ссылок](../test/legal.test.mjs)
+- Обзор сервиса (в архиве: README.md)
+- Нормативный модуль (в архиве: server/legal.mjs)
+- Пакет источников (в архиве: server/legal-data/civil-works-2026-09-05.json)
+- Проверки правовых ссылок (в архиве: test/legal.test.mjs)

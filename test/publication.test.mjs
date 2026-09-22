@@ -28,7 +28,17 @@ test('documents are public while application data and arbitrary source paths sta
       const res=await fetch(base+path);assert.equal(res.status,200,path);assert.equal(res.headers.get('x-content-type-options'),'nosniff');assert.ok((await res.text()).length>100);
     }
     const head=await fetch(base+'/docs/local-installation/architecture.html',{method:'HEAD'});assert.equal(head.status,200);assert.equal(await head.text(),'');
-    const md=await fetch(base+'/docs/local-installation/deployment.md');assert.equal(md.status,200);assert.match(md.headers.get('content-disposition'),/attachment/);assert.match(await md.text(),/не готовая сборка с локальными моделями/);
+    const md=await fetch(base+'/docs/local-installation/deployment.md');assert.equal(md.status,200);assert.match(md.headers.get('content-disposition'),/attachment/);
+    const deployment=await md.text();
+    assert.match(deployment,/без весов моделей и без Codex CLI/);
+    assert.match(deployment,/DOCS_MODEL_PROVIDER/);
+    // The downloadable .md is read from its own directory: repository paths and
+    // sibling documents must not stay as links that resolve nowhere.
+    assert.doesNotMatch(deployment,/\]\(<?\.\.\//);
+    assert.match(deployment,/\]\(architecture\.md\)/,'sibling documents keep working links');
+    const architectureMarkdown=await (await fetch(base+'/docs/local-installation/architecture.md')).text();
+    assert.doesNotMatch(architectureMarkdown,/\]\(<?\.\.\//);
+    assert.match(architectureMarkdown,/\(в архиве: server\/main\.mjs\)/,'repository paths become archive references');
     for(const path of ['/docs/api/bootstrap','/docs/api/legal-base','/docs/api/codex'])assert.equal((await fetch(base+path)).status,401);
     for(const path of ['/docs/downloads/auth.json','/docs/local-installation/server/main.mjs','/docs/downloads/%2e%2e%2fdata/contracts.sqlite','/docs/local-installation/__proto__'])assert.equal((await fetch(base+path)).status,404);
     assert.equal((await fetch(base+'/docs/local-installation/architecture.html',{method:'POST'})).status,404);
